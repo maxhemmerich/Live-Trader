@@ -14,6 +14,39 @@ from dotenv import load_dotenv
 from gymnasium import spaces
 
 
+BASE_OHLCV_COLUMNS = ["ts", "open", "high", "low", "close", "vol"]
+OBSERVATION_COLUMNS = [
+    "rsi_14_norm",
+    "rsi_7_norm",
+    "rsi_21_norm",
+    "stoch_k_norm",
+    "stoch_d_norm",
+    "cci_20_clipped",
+    "willr_14_norm",
+    "close_vs_ema_9",
+    "close_vs_ema_20",
+    "close_vs_ema_50",
+    "close_vs_ema_200",
+    "macd_hist_over_atr_14",
+    "adx_14_norm",
+    "bb20_width_over_close",
+    "bb50_width_over_close",
+    "bb20_position",
+    "atr_14_over_close",
+    "vol_over_vol_sma_20",
+    "obv_pct_change",
+    "eth_value_weight",
+    "hour_sin",
+    "hour_cos",
+    "dow_sin",
+    "dow_cos",
+    "dom_sin",
+    "dom_cos",
+    "usd_value_weight",
+]
+OBSERVATION_SIZE = len(OBSERVATION_COLUMNS)
+
+
 class KrakenLiveEnv(gym.Env):
     metadata = {"render_modes": ["human"]}
 
@@ -65,12 +98,12 @@ class KrakenLiveEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(27,),
+            shape=(OBSERVATION_SIZE,),
             dtype=np.float32,
         )
 
         self.df = self._initialize_candle_buffer()
-        self.last_obs = np.zeros((27,), dtype=np.float32)
+        self.last_obs = np.zeros((OBSERVATION_SIZE,), dtype=np.float32)
         self.last_action = "hold"
         self.step_count = 0
         self.cumulative_reward = 0.0
@@ -95,11 +128,11 @@ class KrakenLiveEnv(gym.Env):
         except Exception as exc:
             self._record_api_error(exc)
             return pd.DataFrame(
-                columns=["ts", "open", "high", "low", "close", "vol"]
+                columns=BASE_OHLCV_COLUMNS
             )
 
         if not latest:
-            return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "vol"])
+            return pd.DataFrame(columns=BASE_OHLCV_COLUMNS)
 
         pages.append(latest)
         earliest_ts = latest[0][0]
@@ -139,7 +172,7 @@ class KrakenLiveEnv(gym.Env):
             time.sleep(1)
 
         all_rows = [row for page in pages for row in page]
-        df = pd.DataFrame(all_rows, columns=["ts", "open", "high", "low", "close", "vol"])
+        df = pd.DataFrame(all_rows, columns=BASE_OHLCV_COLUMNS)
         df = df.drop_duplicates(subset=["ts"]).sort_values("ts").tail(self.max_buffer_rows)
         df = df.reset_index(drop=True)
         return df
@@ -274,7 +307,7 @@ class KrakenLiveEnv(gym.Env):
             "portfolio_usd",
             "eth_balance",
             "usd_balance",
-        ] + [f"obs_{i}" for i in range(27)]
+        ] + OBSERVATION_COLUMNS
 
         with open(self.trading_log_path, "w", encoding="utf-8") as f:
             f.write(",".join(header) + "\n")
@@ -340,7 +373,7 @@ class KrakenLiveEnv(gym.Env):
         usd_balance, eth_balance = self._extract_balances(balance)
 
         if self.df.empty:
-            obs = np.zeros((27,), dtype=np.float32)
+            obs = np.zeros((OBSERVATION_SIZE,), dtype=np.float32)
         else:
             obs = self._compute_observation(usd_balance, eth_balance)
 
@@ -380,7 +413,7 @@ class KrakenLiveEnv(gym.Env):
 
         if recent:
             recent_df = pd.DataFrame(
-                recent, columns=["ts", "open", "high", "low", "close", "vol"]
+                recent, columns=BASE_OHLCV_COLUMNS
             )
             self.df = pd.concat([self.df, recent_df], ignore_index=True)
             self.df = (
