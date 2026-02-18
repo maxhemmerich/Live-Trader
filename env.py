@@ -24,6 +24,20 @@ TIMEFRAME    = "1h"
 WINDOW       = 20        # Number of past candles in each observation
 INITIAL_CASH = 10_000.0
 TRADING_FEE  = 0.0026    # Kraken taker fee (0.26 %)
+FEATURE_COLUMNS = [
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "rsi_14",
+    "macd",
+    "macd_signal",
+    "macd_hist",
+    "bb_upper",
+    "bb_mid",
+    "bb_lower",
+]
 
 
 class TradingEnv(gym.Env):
@@ -47,6 +61,12 @@ class TradingEnv(gym.Env):
 
     def __init__(self, df: pd.DataFrame, window: int = WINDOW):
         super().__init__()
+
+        if list(df.columns) != FEATURE_COLUMNS:
+            raise ValueError(
+                "TradingEnv expects exact feature columns/order: "
+                f"{FEATURE_COLUMNS}; got {list(df.columns)}"
+            )
 
         self.df     = df.reset_index(drop=True)
         self.window = window
@@ -186,6 +206,7 @@ def fetch_ohlcv(
     df["bb_lower"] = bb_df["BBL_20_2.0"]
 
     df.dropna(inplace=True)
+    df = df[FEATURE_COLUMNS].copy()
     df.reset_index(drop=True, inplace=True)
 
     return df
