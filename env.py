@@ -434,8 +434,12 @@ class KrakenLiveEnv(gym.Env):
         time.sleep(60)
 
         action_raw = float(np.array(action).reshape(-1)[0])
+        self.last_action = "hold"
         if self.kill_switch:
-            return self.last_obs.copy(), 0.0, True, False, {"kill_switch": True}
+            return self.last_obs.copy(), 0.0, True, False, {
+                "kill_switch": True,
+                "action_taken": self.last_action,
+            }
 
         try:
             recent = self.exchange.fetch_ohlcv(
@@ -447,7 +451,10 @@ class KrakenLiveEnv(gym.Env):
         except Exception as exc:
             self._record_api_error(exc)
             terminated = self.kill_switch
-            return self.last_obs.copy(), 0.0, terminated, True, {"api_error": True}
+            return self.last_obs.copy(), 0.0, terminated, True, {
+                "api_error": True,
+                "action_taken": self.last_action,
+            }
 
         if recent:
             recent_df = pd.DataFrame(
@@ -464,12 +471,14 @@ class KrakenLiveEnv(gym.Env):
         balance = self._safe_fetch_balance()
         if balance is None:
             terminated = self.kill_switch
-            return self.last_obs.copy(), 0.0, terminated, True, {"api_error": True}
+            return self.last_obs.copy(), 0.0, terminated, True, {
+                "api_error": True,
+                "action_taken": self.last_action,
+            }
 
         usd_balance, eth_balance = self._extract_balances(balance)
         price = float(self.df.iloc[-1]["close"]) if not self.df.empty else 0.0
 
-        self.last_action = "hold"
         trade_executed = False
         if not self.kill_switch:
             if action_raw > 0.5:
@@ -496,7 +505,10 @@ class KrakenLiveEnv(gym.Env):
         balance_after = self._safe_fetch_balance()
         if balance_after is None:
             terminated = self.kill_switch
-            return self.last_obs.copy(), 0.0, terminated, True, {"api_error": True}
+            return self.last_obs.copy(), 0.0, terminated, True, {
+                "api_error": True,
+                "action_taken": self.last_action,
+            }
 
         usd_balance, eth_balance = self._extract_balances(balance_after)
         price = float(self.df.iloc[-1]["close"]) if not self.df.empty else 0.0

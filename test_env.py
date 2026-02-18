@@ -1,6 +1,7 @@
 """Basic smoke entrypoint for the KrakenLiveEnv environment."""
 
 import numpy as np
+import pandas as pd
 
 import env as env_module
 from env import KrakenLiveEnv
@@ -10,6 +11,38 @@ def main() -> None:
     env_module.time.sleep = lambda *_args, **_kwargs: None
 
     env = KrakenLiveEnv()
+
+    synthetic_df = pd.DataFrame(
+        [
+            [1700000000000 + i * 60000, 2000.0 + i, 2005.0 + i, 1995.0 + i, 2002.0 + i, 10.0 + i]
+            for i in range(220)
+        ],
+        columns=env_module.BASE_OHLCV_COLUMNS,
+    )
+
+    class MockExchange:
+        def fetch_ohlcv(self, symbol, timeframe="1m", since=None, limit=3):
+            del symbol, timeframe, since
+            rows = synthetic_df[env_module.BASE_OHLCV_COLUMNS].values.tolist()
+            return rows[-limit:]
+
+        def fetch_balance(self):
+            return {
+                "free": {"ETH": 0.05, "USD": 135.0},
+                "total": {"ETH": 0.05, "USD": 135.0},
+            }
+
+        def create_market_buy_order(self, symbol, amount):
+            del symbol, amount
+            return {"id": "mock_order", "status": "closed"}
+
+        def create_market_sell_order(self, symbol, amount):
+            del symbol, amount
+            return {"id": "mock_order", "status": "closed"}
+
+    env.exchange = MockExchange()
+    env.df = synthetic_df.copy()
+
     print(f"Loaded environment: {env.__class__.__name__}")
 
     obs, info = env.reset()
