@@ -2,7 +2,7 @@ ccxt
 stable-baselines3[extra]
 gymnasium
 pandas
-pandas-ta
+ta
 torch
 python-dotenv
 streamlit

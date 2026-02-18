@@ -9,7 +9,10 @@ import ccxt
 import gymnasium as gym
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
+from ta.momentum import RSIIndicator, StochasticOscillator, WilliamsRIndicator
+from ta.trend import ADXIndicator, CCIIndicator, EMAIndicator, MACD
+from ta.volatility import AverageTrueRange, BollingerBands
+from ta.volume import OnBalanceVolumeIndicator
 from dotenv import load_dotenv
 from gymnasium import spaces
 
@@ -209,41 +212,74 @@ class KrakenLiveEnv(gym.Env):
     def _compute_observation(self, usd_balance: float, eth_balance: float) -> np.ndarray:
         df = self.df.copy()
 
-        df["rsi_14"] = ta.rsi(df["close"], length=14)
-        df["rsi_7"] = ta.rsi(df["close"], length=7)
-        df["rsi_21"] = ta.rsi(df["close"], length=21)
+        df["rsi_14"] = RSIIndicator(close=df["close"], window=14).rsi()
+        df["rsi_7"] = RSIIndicator(close=df["close"], window=7).rsi()
+        df["rsi_21"] = RSIIndicator(close=df["close"], window=21).rsi()
 
-        stoch = ta.stoch(df["high"], df["low"], df["close"])
-        df["stoch_k"] = stoch["STOCHk_14_3_3"]
-        df["stoch_d"] = stoch["STOCHd_14_3_3"]
+        stoch = StochasticOscillator(
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
+            window=14,
+            smooth_window=3,
+        )
+        df["stoch_k"] = stoch.stoch()
+        df["stoch_d"] = stoch.stoch_signal()
 
-        df["cci_20"] = ta.cci(df["high"], df["low"], df["close"], length=20)
-        df["willr_14"] = ta.willr(df["high"], df["low"], df["close"], length=14)
+        df["cci_20"] = CCIIndicator(
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
+            window=20,
+        ).cci()
+        df["willr_14"] = WilliamsRIndicator(
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
+            lbp=14,
+        ).williams_r()
 
-        df["ema_9"] = ta.ema(df["close"], length=9)
-        df["ema_20"] = ta.ema(df["close"], length=20)
-        df["ema_50"] = ta.ema(df["close"], length=50)
-        df["ema_200"] = ta.ema(df["close"], length=200)
+        df["ema_9"] = EMAIndicator(close=df["close"], window=9).ema_indicator()
+        df["ema_20"] = EMAIndicator(close=df["close"], window=20).ema_indicator()
+        df["ema_50"] = EMAIndicator(close=df["close"], window=50).ema_indicator()
+        df["ema_200"] = EMAIndicator(close=df["close"], window=200).ema_indicator()
 
-        macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
-        df["macd_hist"] = macd["MACDh_12_26_9"]
+        df["macd_hist"] = MACD(
+            close=df["close"],
+            window_fast=12,
+            window_slow=26,
+            window_sign=9,
+        ).macd_diff()
 
-        df["adx_14"] = ta.adx(df["high"], df["low"], df["close"], length=14)["ADX_14"]
+        df["adx_14"] = ADXIndicator(
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
+            window=14,
+        ).adx()
 
-        bb20 = ta.bbands(df["close"], length=20, std=2.0)
-        bb50 = ta.bbands(df["close"], length=50, std=2.0)
+        bb20 = BollingerBands(close=df["close"], window=20, window_dev=2)
+        bb50 = BollingerBands(close=df["close"], window=50, window_dev=2)
 
-        df["bb20_u"] = bb20["BBU_20_2.0"]
-        df["bb20_l"] = bb20["BBL_20_2.0"]
-        df["bb20_p"] = bb20["BBP_20_2.0"]
+        df["bb20_u"] = bb20.bollinger_hband()
+        df["bb20_l"] = bb20.bollinger_lband()
+        df["bb20_p"] = bb20.bollinger_pband()
 
-        df["bb50_u"] = bb50["BBU_50_2.0"]
-        df["bb50_l"] = bb50["BBL_50_2.0"]
+        df["bb50_u"] = bb50.bollinger_hband()
+        df["bb50_l"] = bb50.bollinger_lband()
 
-        df["atr_14"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+        df["atr_14"] = AverageTrueRange(
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
+            window=14,
+        ).average_true_range()
 
         df["vol_sma_20"] = df["vol"].rolling(20).mean()
-        df["obv"] = ta.obv(df["close"], df["vol"])
+        df["obv"] = OnBalanceVolumeIndicator(
+            close=df["close"],
+            volume=df["vol"],
+        ).on_balance_volume()
         df["obv_pct"] = df["obv"].pct_change(periods=1)
 
         last = df.iloc[-1]

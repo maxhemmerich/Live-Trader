@@ -12,6 +12,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from env import KrakenLiveEnv
+
 
 @dataclass
 class MockKrakenExchange:
@@ -90,11 +92,7 @@ def _to_mock_ohlcv(df: pd.DataFrame) -> list[list[float]]:
 
 
 def _build_env(synthetic_df: pd.DataFrame):
-    """Instantiate KrakenLiveEnv (or repo TradingEnv fallback)."""
-    try:
-        from live_env import KrakenLiveEnv  # type: ignore
-    except Exception:
-        from env import TradingEnv as KrakenLiveEnv  # repo fallback
+    """Instantiate KrakenLiveEnv from env.py."""
 
     sig = inspect.signature(KrakenLiveEnv)
     if "df" in sig.parameters:
