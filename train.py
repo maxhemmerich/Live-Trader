@@ -23,7 +23,7 @@ from stable_baselines3 import SAC
 from stable_baselines3.common.env_checker import check_env
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 
-from env import TradingEnv, fetch_ohlcv
+from env import FEATURE_COLUMNS, TradingEnv, fetch_ohlcv
 
 load_dotenv()
 
@@ -56,6 +56,7 @@ def main():
     print("[2/5] Building environments...")
     train_env = TradingEnv(train_df)
     eval_env  = TradingEnv(eval_df)
+    _validate_feature_contract(df, train_env, eval_env)
 
     # ── 4. Validate environment ────────────────────────────────────────────
     print("[3/5] Validating environment...")
@@ -114,6 +115,35 @@ def main():
     print(f"\nRunning evaluation and writing {LOG_CSV} ...")
     _run_eval_and_log(model, eval_env, LOG_CSV)
     print(f"Log written to {LOG_CSV}")
+
+
+def _validate_feature_contract(df, train_env: TradingEnv, eval_env: TradingEnv) -> None:
+    """Fail fast if data/env feature contract drifts across files."""
+    if list(df.columns) != FEATURE_COLUMNS:
+        raise ValueError(
+            "Fetched dataframe columns do not match expected feature contract. "
+            f"Expected {FEATURE_COLUMNS}, got {list(df.columns)}"
+        )
+
+    expected_features = len(FEATURE_COLUMNS)
+    if train_env.n_features != expected_features or eval_env.n_features != expected_features:
+        raise ValueError(
+            "Feature count mismatch. "
+            f"Expected {expected_features}, got train={train_env.n_features}, "
+            f"eval={eval_env.n_features}"
+        )
+
+    expected_obs_shape = (train_env.window * expected_features,)
+    if train_env.observation_space.shape != expected_obs_shape:
+        raise ValueError(
+            "Train observation shape mismatch. "
+            f"Expected {expected_obs_shape}, got {train_env.observation_space.shape}"
+        )
+    if eval_env.observation_space.shape != expected_obs_shape:
+        raise ValueError(
+            "Eval observation shape mismatch. "
+            f"Expected {expected_obs_shape}, got {eval_env.observation_space.shape}"
+        )
 
 
 def _run_eval_and_log(model: SAC, env: TradingEnv, log_path: str) -> None:
