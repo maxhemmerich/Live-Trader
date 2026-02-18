@@ -1,0 +1,6 @@
+.env
+checkpoints/*
+!checkpoints/.gitkeep
+trading_log.csv
+__pycache__/
+*.zip

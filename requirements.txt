@@ -1,0 +1,10 @@
+ccxt
+stable-baselines3[extra]
+gymnasium
+pandas
+pandas-ta
+torch
+python-dotenv
+streamlit
+streamlit-autorefresh
+numpy
