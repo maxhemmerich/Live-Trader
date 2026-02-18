@@ -1,3 +1,5 @@
+"""Kraken live trading environment using indicators from the ta library."""
+
 import glob
 import logging
 import os
