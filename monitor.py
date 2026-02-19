@@ -112,13 +112,13 @@ st.markdown("---")
 
 # ── Line charts ────────────────────────────────────────────────────────────
 st.subheader("Portfolio Value Over Time")
-st.line_chart(df.set_index("timestamp")[["portfolio_usd"]], use_container_width=True)
+st.line_chart(df.set_index("timestamp")[["portfolio_usd"]], width='stretch')
 
 st.subheader("Action Signal Over Time")
-st.line_chart(df.set_index("timestamp")[["action_raw"]], use_container_width=True)
+st.line_chart(df.set_index("timestamp")[["action_raw"]], width='stretch')
 
 st.subheader("ETH/USD Price Over Time")
-st.line_chart(df.set_index("timestamp")[["eth_price"]], use_container_width=True)
+st.line_chart(df.set_index("timestamp")[["eth_price"]], width='stretch')
 
 # ── Recent trades ──────────────────────────────────────────────────────────
 st.subheader("Recent Trades (Last 20 Steps)")
@@ -133,7 +133,7 @@ recent["portfolio_usd"]  = recent["portfolio_usd"].map("${:,.2f}".format)
 recent["action_raw"]     = recent["action_raw"].map("{:+.4f}".format)
 recent["reward"]         = recent["reward"].map("{:.6f}".format)
 
-st.dataframe(recent, use_container_width=True, hide_index=True)
+st.dataframe(recent, width='stretch', hide_index=True)
 
 # ── Summary statistics ─────────────────────────────────────────────────────
 st.markdown("---")
@@ -142,7 +142,7 @@ st.subheader("Summary Statistics")
 stat_col1, stat_col2 = st.columns(2)
 with stat_col1:
     st.write("**Reward**")
-    st.dataframe(df["reward"].describe().rename("value").to_frame(), use_container_width=True)
+    st.dataframe(df["reward"].describe().rename("value").to_frame(), width='stretch')
 with stat_col2:
     st.write("**Action Signal (Raw)**")
-    st.dataframe(df["action_raw"].describe().rename("value").to_frame(), use_container_width=True)
+    st.dataframe(df["action_raw"].describe().rename("value").to_frame(), width='stretch')
