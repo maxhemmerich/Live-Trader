@@ -519,7 +519,12 @@ class KrakenLiveEnv(gym.Env):
         )
 
         self.last_balance = total_usd
-        self.starting_portfolio_usd = total_usd
+        self.starting_portfolio_usd = (eth_balance * price) + usd_balance
+        print(
+            "[INIT] Starting portfolio value: "
+            f"${self.starting_portfolio_usd:.2f} "
+            f"(ETH: {eth_balance:.4f} × ${price:.2f} + USD: ${usd_balance:.2f})"
+        )
         self.cumulative_reward = 0.0
         self.step_count = 0
         self.last_action = "hold"
