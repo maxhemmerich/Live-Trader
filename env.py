@@ -20,7 +20,7 @@ from gymnasium import spaces
 
 
 BASE_OHLCV_COLUMNS = ["ts", "open", "high", "low", "close", "vol"]
-OBSERVATION_COLUMNS = [
+FEATURE_COLUMNS = [
     "rsi_14_norm",
     "rsi_7_norm",
     "rsi_21_norm",
@@ -40,6 +40,15 @@ OBSERVATION_COLUMNS = [
     "atr_14_over_close",
     "vol_over_vol_sma_20",
     "obv_pct_change",
+    "return_10_clipped",
+    "return_50_clipped",
+    "return_200_clipped",
+    "realized_vol_20_norm",
+    "bid_ask_spread_frac",
+    "bid_depth_5_over_vol_sma_20",
+    "ask_depth_5_over_vol_sma_20",
+    "bid_ask_imbalance",
+    "price_vs_best_bid",
     "eth_value_weight",
     "hour_sin",
     "hour_cos",
@@ -49,7 +58,8 @@ OBSERVATION_COLUMNS = [
     "dom_cos",
     "usd_value_weight",
 ]
-OBSERVATION_SIZE = len(OBSERVATION_COLUMNS)
+OBSERVATION_COLUMNS = FEATURE_COLUMNS
+OBSERVATION_SIZE = len(FEATURE_COLUMNS)
 
 
 class KrakenLiveEnv(gym.Env):
@@ -290,6 +300,84 @@ class KrakenLiveEnv(gym.Env):
         day_of_week = ts.dayofweek
         day_of_month = min(ts.day, 30)
 
+        return_10 = np.nan_to_num(
+            np.clip((price - float(df["close"].iloc[-11])) / max(float(df["close"].iloc[-11]), 1e-9), -0.1, 0.1),
+            nan=0.0,
+            posinf=1.0,
+            neginf=-1.0,
+        )
+        return_50 = np.nan_to_num(
+            np.clip((price - float(df["close"].iloc[-51])) / max(float(df["close"].iloc[-51]), 1e-9), -0.2, 0.2),
+            nan=0.0,
+            posinf=1.0,
+            neginf=-1.0,
+        )
+        return_200 = np.nan_to_num(
+            np.clip((price - float(df["close"].iloc[-201])) / max(float(df["close"].iloc[-201]), 1e-9), -0.5, 0.5),
+            nan=0.0,
+            posinf=1.0,
+            neginf=-1.0,
+        )
+
+        one_period_returns = df["close"].pct_change().tail(20)
+        realized_vol_20 = np.nan_to_num(
+            float(one_period_returns.std()) / 0.02,
+            nan=0.0,
+            posinf=1.0,
+            neginf=-1.0,
+        )
+
+        bid_ask_spread_frac = 0.0
+        bid_depth_5_over_vol_sma_20 = 0.0
+        ask_depth_5_over_vol_sma_20 = 0.0
+        bid_ask_imbalance = 0.0
+        price_vs_best_bid = 0.0
+        try:
+            order_book = self.exchange.fetch_order_book("ETH/USD", limit=20)
+            bids = order_book.get("bids", [])
+            asks = order_book.get("asks", [])
+            if bids and asks:
+                best_bid_price = float(bids[0][0])
+                best_ask_price = float(asks[0][0])
+                mid_price = (best_bid_price + best_ask_price) / 2.0
+
+                bid_depth_5 = float(sum(level[1] for level in bids[:5]))
+                ask_depth_5 = float(sum(level[1] for level in asks[:5]))
+                vol_sma_20 = max(float(last["vol_sma_20"]), 1e-9)
+
+                bid_ask_spread_frac = np.nan_to_num(
+                    (best_ask_price - best_bid_price) / max(mid_price, 1e-9),
+                    nan=0.0,
+                    posinf=1.0,
+                    neginf=-1.0,
+                )
+                bid_depth_5_over_vol_sma_20 = np.nan_to_num(
+                    bid_depth_5 / vol_sma_20,
+                    nan=0.0,
+                    posinf=1.0,
+                    neginf=-1.0,
+                )
+                ask_depth_5_over_vol_sma_20 = np.nan_to_num(
+                    ask_depth_5 / vol_sma_20,
+                    nan=0.0,
+                    posinf=1.0,
+                    neginf=-1.0,
+                )
+                bid_ask_imbalance = np.nan_to_num(
+                    (bid_depth_5 - ask_depth_5) / max(bid_depth_5 + ask_depth_5, 1e-9),
+                    nan=0.0,
+                    posinf=1.0,
+                    neginf=-1.0,
+                )
+                price_vs_best_bid = np.nan_to_num(
+                    (price - best_bid_price) / max(price, 1e-9),
+                    nan=0.0,
+                    posinf=1.0,
+                    neginf=-1.0,
+                )
+        except Exception:
+            pass
+
         obs = np.array(
             [
                 float(last["rsi_14"]) / 100.0,
@@ -311,6 +399,15 @@ class KrakenLiveEnv(gym.Env):
                 float(last["atr_14"]) / max(price, 1e-9),
                 float(last["vol"]) / max(float(last["vol_sma_20"]), 1e-9),
                 float(last["obv_pct"]),
+                float(return_10),
+                float(return_50),
+                float(return_200),
+                float(realized_vol_20),
+                float(bid_ask_spread_frac),
+                float(bid_depth_5_over_vol_sma_20),
+                float(ask_depth_5_over_vol_sma_20),
+                float(bid_ask_imbalance),
+                float(price_vs_best_bid),
                 (eth_balance * price) / total_usd,
                 np.sin(2 * np.pi * hour / 24.0),
                 np.cos(2 * np.pi * hour / 24.0),
@@ -341,7 +438,7 @@ class KrakenLiveEnv(gym.Env):
             "portfolio_usd",
             "eth_balance",
             "usd_balance",
-        ] + OBSERVATION_COLUMNS
+        ] + FEATURE_COLUMNS
 
         with open(self.trading_log_path, "w", encoding="utf-8") as f:
             f.write(",".join(header) + "\n")

@@ -32,6 +32,13 @@ def main() -> None:
                 "total": {"ETH": 0.05, "USD": 135.0},
             }
 
+        def fetch_order_book(self, symbol, limit=20):
+            del symbol
+            mid = float(synthetic_df.iloc[-1]["close"])
+            bid_levels = [[mid - (i + 1) * 0.5, 1.5 + i * 0.2] for i in range(limit)]
+            ask_levels = [[mid + (i + 1) * 0.5, 1.4 + i * 0.2] for i in range(limit)]
+            return {"bids": bid_levels, "asks": ask_levels}
+
         def create_market_buy_order(self, symbol, amount):
             del symbol, amount
             return {"id": "mock_order", "status": "closed"}
