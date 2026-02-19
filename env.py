@@ -107,48 +107,27 @@ class KrakenLiveEnv(gym.Env):
             dtype=np.float32,
         )
 
+        self.consecutive_errors = 0
+        self.kill_switch = False
         self.df = self._initialize_candle_buffer()
         self.last_obs = np.zeros((OBSERVATION_SIZE,), dtype=np.float32)
         self.last_action = "hold"
         self.step_count = 0
         self.cumulative_reward = 0.0
-        self.kill_switch = False
-        self.consecutive_errors = 0
         self.starting_portfolio_usd: Optional[float] = None
         self.last_balance = 0.0
 
         self._init_log_file()
 
     def _initialize_candle_buffer(self) -> pd.DataFrame:
-        pages = []
-        page_num = 0
+        all_bars = []
+        since = None
 
-        try:
-            latest = self.exchange.fetch_ohlcv(
-                self.symbol,
-                timeframe=self.timeframe,
-                limit=self.candle_limit,
-            )
-            self.consecutive_errors = 0
-        except Exception as exc:
-            self._record_api_error(exc)
-            return pd.DataFrame(
-                columns=BASE_OHLCV_COLUMNS
-            )
-
-        if not latest:
-            return pd.DataFrame(columns=BASE_OHLCV_COLUMNS)
-
-        pages.append(latest)
-        earliest_ts = latest[0][0]
-        page_num += 1
-
-        while sum(len(p) for p in pages) < self.max_buffer_rows:
-            since = earliest_ts - (self.candle_limit * 60 * 1000)
+        while len(all_bars) < self.max_buffer_rows:
             try:
-                older = self.exchange.fetch_ohlcv(
+                batch = self.exchange.fetch_ohlcv(
                     self.symbol,
-                    timeframe=self.timeframe,
+                    self.timeframe,
                     since=since,
                     limit=self.candle_limit,
                 )
@@ -157,29 +136,23 @@ class KrakenLiveEnv(gym.Env):
                 self._record_api_error(exc)
                 break
 
-            if not older:
+            if not batch:
                 break
 
-            older_only = [row for row in older if row[0] < earliest_ts]
-            if not older_only:
-                break
-
-            pages.append(older_only)
-            earliest_ts = older_only[0][0]
-            page_num += 1
-
-            if page_num % 10 == 0:
-                current_rows = sum(len(p) for p in pages)
-                print(
-                    f"Init fetch progress: pages={page_num}, rows={current_rows}, earliest_ts={earliest_ts}"
-                )
+            all_bars = batch + all_bars
+            since = batch[0][0] - 60_000
 
             time.sleep(1)
 
-        all_rows = [row for page in pages for row in page]
-        df = pd.DataFrame(all_rows, columns=BASE_OHLCV_COLUMNS)
-        df = df.drop_duplicates(subset=["ts"]).sort_values("ts").tail(self.max_buffer_rows)
-        df = df.reset_index(drop=True)
+            if len(all_bars) % (self.candle_limit * 10) == 0:
+                print(f"[INIT] Collected {len(all_bars)} bars so far...")
+
+        df = pd.DataFrame(all_bars, columns=BASE_OHLCV_COLUMNS)
+        df.drop_duplicates(subset=["ts"], inplace=True)
+        df.sort_values("ts", inplace=True)
+        df = df.tail(self.max_buffer_rows)
+        df.reset_index(drop=True, inplace=True)
+        print(f"[INIT] Buffer ready: {len(df)} bars")
         return df
 
     def _record_api_error(self, exc: Exception) -> None:
