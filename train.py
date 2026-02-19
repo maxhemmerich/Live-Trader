@@ -119,8 +119,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint-every",
         type=int,
-        default=100,
-        help="Save checkpoint every N steps (default: 100)",
+        default=10,
+        help="Save checkpoint every N steps (default: 10)",
     )
     return parser.parse_args()
 
