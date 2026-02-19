@@ -15,7 +15,7 @@ def main() -> None:
     synthetic_df = pd.DataFrame(
         [
             [1700000000000 + i * 60000, 2000.0 + i, 2005.0 + i, 1995.0 + i, 2002.0 + i, 10.0 + i]
-            for i in range(220)
+            for i in range(500)
         ],
         columns=env_module.BASE_OHLCV_COLUMNS,
     )
@@ -39,24 +39,33 @@ def main() -> None:
             ask_levels = [[mid + (i + 1) * 0.5, 1.4 + i * 0.2] for i in range(limit)]
             return {"bids": bid_levels, "asks": ask_levels}
 
-        def create_market_buy_order(self, symbol, amount):
-            del symbol, amount
-            return {"id": "mock_order", "status": "closed"}
+        def create_limit_buy_order(self, symbol, amount, price):
+            del symbol, amount, price
+            return {"id": "mock_order", "status": "closed", "average": 1955.00, "price": 1955.00}
 
-        def create_market_sell_order(self, symbol, amount):
-            del symbol, amount
-            return {"id": "mock_order", "status": "closed"}
+        def create_limit_sell_order(self, symbol, amount, price):
+            del symbol, amount, price
+            return {"id": "mock_order", "status": "closed", "average": 1955.00, "price": 1955.00}
+
+        def fetch_order(self, order_id, symbol):
+            del order_id, symbol
+            return {"id": "mock_order", "status": "closed", "average": 1955.00, "price": 1955.00}
+
+        def cancel_order(self, order_id, symbol):
+            del order_id, symbol
+            return {"id": "mock_order", "status": "canceled"}
 
     env.exchange = MockExchange()
     env.df = synthetic_df.copy()
-
-    print(f"Loaded environment: {env.__class__.__name__}")
 
     obs, info = env.reset()
     print(f"Reset observation shape: {obs.shape}")
     print(f"Reset info: {info}")
 
+    assert obs.shape == (227,)
     assert obs.shape == env.observation_space.shape
+    assert not np.isnan(obs).any()
+    assert not np.isinf(obs).any()
 
     for step_num in range(1, 6):
         action = env.action_space.sample()
@@ -64,17 +73,17 @@ def main() -> None:
 
         has_nan = bool(np.isnan(obs).any())
         has_inf = bool(np.isinf(obs).any())
-        has_nan_or_inf = has_nan or has_inf
         action_taken = info.get("action_taken", "unknown")
 
         print(
             f"Step {step_num}: "
             f"obs_shape={obs.shape}, "
-            f"has_nan_or_inf={has_nan_or_inf}, "
+            f"has_nan_or_inf={has_nan or has_inf}, "
             f"reward={reward:.8f}, "
             f"action_taken={action_taken}"
         )
 
+        assert obs.shape == (227,)
         assert obs.shape == env.observation_space.shape
         assert not has_nan, f"NaN detected in observation at step {step_num}"
         assert not has_inf, f"Inf detected in observation at step {step_num}"
@@ -82,10 +91,6 @@ def main() -> None:
         assert isinstance(action_taken, str)
 
         if terminated or truncated:
-            print(
-                f"Episode ended early at step {step_num} "
-                f"(terminated={terminated}, truncated={truncated})"
-            )
             break
 
     print("ALL ASSERTIONS PASSED")
