@@ -211,6 +211,24 @@ class KrakenLiveEnv(gym.Env):
 
         return usd_balance, eth_balance
 
+    def _get_total_balance(
+        self,
+        eth_balance: float,
+        usd_balance: float,
+        eth_price: float,
+        context: str,
+    ) -> float:
+        total_balance = (eth_balance * eth_price) + usd_balance
+        print(
+            "[BALANCE DEBUG] "
+            f"context={context} | "
+            f"eth_balance={eth_balance:.8f}, "
+            f"usd_balance={usd_balance:.8f}, "
+            f"eth_price={eth_price:.8f}, "
+            f"total_usd={total_balance:.8f}"
+        )
+        return total_balance
+
     def _compute_observation(self, usd_balance: float, eth_balance: float) -> np.ndarray:
         df = self.df.copy()
 
@@ -286,7 +304,12 @@ class KrakenLiveEnv(gym.Env):
 
         last = df.iloc[-1]
         price = float(last["close"])
-        total_usd = eth_balance * price + usd_balance
+        total_usd = self._get_total_balance(
+            eth_balance=eth_balance,
+            usd_balance=usd_balance,
+            eth_price=price,
+            context="compute_observation",
+        )
         total_usd = max(total_usd, 1e-9)
 
         ts = pd.to_datetime(int(last["ts"]), unit="ms", utc=True)
@@ -418,7 +441,12 @@ class KrakenLiveEnv(gym.Env):
         self.last_obs = obs
 
         price = float(self.df.iloc[-1]["close"]) if not self.df.empty else 0.0
-        total_usd = eth_balance * price + usd_balance
+        total_usd = self._get_total_balance(
+            eth_balance=eth_balance,
+            usd_balance=usd_balance,
+            eth_price=price,
+            context="reset",
+        )
 
         self.last_balance = total_usd
         self.starting_portfolio_usd = total_usd
@@ -514,7 +542,12 @@ class KrakenLiveEnv(gym.Env):
         price = float(self.df.iloc[-1]["close"]) if not self.df.empty else 0.0
 
         obs = self._compute_observation(usd_balance, eth_balance)
-        portfolio_usd = eth_balance * price + usd_balance
+        portfolio_usd = self._get_total_balance(
+            eth_balance=eth_balance,
+            usd_balance=usd_balance,
+            eth_price=price,
+            context=f"step_{self.step_count + 1}",
+        )
 
         prev_balance = max(self.last_balance, 1e-9)
         reward = (portfolio_usd - prev_balance) / prev_balance

@@ -26,7 +26,6 @@ st.set_page_config(
 )
 
 LOG_CSV      = "trading_log.csv"
-INITIAL_CASH = 10_000.0
 
 # ── Sidebar controls ───────────────────────────────────────────────────────
 st.sidebar.title("Dashboard Controls")
@@ -76,9 +75,10 @@ if df is None or df.empty:
 
 # ── KPI metrics ────────────────────────────────────────────────────────────
 latest           = df.iloc[-1]
-portfolio_value  = latest["portfolio_usd"]
-total_pnl        = portfolio_value - INITIAL_CASH
-pnl_pct          = (total_pnl / INITIAL_CASH) * 100.0
+portfolio_value      = latest["portfolio_usd"]
+initial_portfolio    = float(df.iloc[0]["portfolio_usd"])
+total_pnl            = portfolio_value - initial_portfolio
+pnl_pct              = (total_pnl / initial_portfolio) * 100.0 if initial_portfolio != 0 else 0.0
 current_action   = latest["action_taken"]
 current_price    = latest["eth_price"]
 total_steps      = len(df)
