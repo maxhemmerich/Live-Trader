@@ -7,10 +7,10 @@ Usage:
 Features:
     - Auto-refreshes every 10 seconds (configurable via sidebar)
     - Loads and displays trading_log.csv produced by train.py
-    - KPI metrics: portfolio value, total PnL, current position, last price
-    - Line charts: portfolio value, agent position, price over time
+    - KPI metrics: portfolio value, total PnL, latest action, last ETH price
+    - Line charts: portfolio value, action signal, ETH price over time
     - Recent trades table (last 20 rows)
-    - Summary statistics for reward and position
+    - Summary statistics for reward and action signal
 """
 
 import os
@@ -76,11 +76,11 @@ if df is None or df.empty:
 
 # ── KPI metrics ────────────────────────────────────────────────────────────
 latest           = df.iloc[-1]
-portfolio_value  = latest["portfolio_value"]
+portfolio_value  = latest["portfolio_usd"]
 total_pnl        = portfolio_value - INITIAL_CASH
 pnl_pct          = (total_pnl / INITIAL_CASH) * 100.0
-current_position = latest["position"]
-current_price    = latest["price"]
+current_action   = latest["action_taken"]
+current_price    = latest["eth_price"]
 total_steps      = len(df)
 
 col1, col2, col3, col4, col5 = st.columns(5)
@@ -96,12 +96,11 @@ col2.metric(
     delta = f"{pnl_pct:+.2f}%",
 )
 col3.metric(
-    label = "Current Position",
-    value = f"{current_position:+.4f}",
-    help  = "-1 = full short  |  0 = flat  |  +1 = full long",
+    label = "Latest Action",
+    value = f"{current_action}",
 )
 col4.metric(
-    label = "Last Price (BTC/USD)",
+    label = "Last Price (ETH/USD)",
     value = f"${current_price:,.2f}",
 )
 col5.metric(
@@ -113,27 +112,26 @@ st.markdown("---")
 
 # ── Line charts ────────────────────────────────────────────────────────────
 st.subheader("Portfolio Value Over Time")
-st.line_chart(df.set_index("timestamp")[["portfolio_value"]], use_container_width=True)
+st.line_chart(df.set_index("timestamp")[["portfolio_usd"]], use_container_width=True)
 
-st.subheader("Agent Position Over Time")
-st.line_chart(df.set_index("timestamp")[["position"]], use_container_width=True)
+st.subheader("Action Signal Over Time")
+st.line_chart(df.set_index("timestamp")[["action_raw"]], use_container_width=True)
 
-st.subheader("BTC/USD Price Over Time")
-st.line_chart(df.set_index("timestamp")[["price"]], use_container_width=True)
+st.subheader("ETH/USD Price Over Time")
+st.line_chart(df.set_index("timestamp")[["eth_price"]], use_container_width=True)
 
 # ── Recent trades ──────────────────────────────────────────────────────────
 st.subheader("Recent Trades (Last 20 Steps)")
 recent = (
-    df[["timestamp", "step", "price", "action", "position", "portfolio_value", "reward"]]
+    df[["timestamp", "step", "eth_price", "action_raw", "action_taken", "portfolio_usd", "reward"]]
     .tail(20)
     .sort_values("step", ascending=False)
     .copy()
 )
-recent["price"]           = recent["price"].map("${:,.2f}".format)
-recent["portfolio_value"] = recent["portfolio_value"].map("${:,.2f}".format)
-recent["action"]          = recent["action"].map("{:+.4f}".format)
-recent["position"]        = recent["position"].map("{:+.4f}".format)
-recent["reward"]          = recent["reward"].map("{:.6f}".format)
+recent["eth_price"]      = recent["eth_price"].map("${:,.2f}".format)
+recent["portfolio_usd"]  = recent["portfolio_usd"].map("${:,.2f}".format)
+recent["action_raw"]     = recent["action_raw"].map("{:+.4f}".format)
+recent["reward"]         = recent["reward"].map("{:.6f}".format)
 
 st.dataframe(recent, use_container_width=True, hide_index=True)
 
@@ -146,5 +144,5 @@ with stat_col1:
     st.write("**Reward**")
     st.dataframe(df["reward"].describe().rename("value").to_frame(), use_container_width=True)
 with stat_col2:
-    st.write("**Position**")
-    st.dataframe(df["position"].describe().rename("value").to_frame(), use_container_width=True)
+    st.write("**Action Signal (Raw)**")
+    st.dataframe(df["action_raw"].describe().rename("value").to_frame(), use_container_width=True)
