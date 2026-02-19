@@ -27,44 +27,7 @@ from env import (
 
 # Canonical column contracts used by the training/evaluation pipeline.
 TRAIN_OHLCV_COLUMNS = ["ts", "open", "high", "low", "close", "vol"]
-TRAIN_OBSERVATION_COLUMNS = [
-    "rsi_14_norm",
-    "rsi_7_norm",
-    "rsi_21_norm",
-    "stoch_k_norm",
-    "stoch_d_norm",
-    "cci_20_clipped",
-    "willr_14_norm",
-    "close_vs_ema_9",
-    "close_vs_ema_20",
-    "close_vs_ema_50",
-    "close_vs_ema_200",
-    "macd_hist_over_atr_14",
-    "adx_14_norm",
-    "bb20_width_over_close",
-    "bb50_width_over_close",
-    "bb20_position",
-    "atr_14_over_close",
-    "vol_over_vol_sma_20",
-    "obv_pct_change",
-    "return_10_clipped",
-    "return_50_clipped",
-    "return_200_clipped",
-    "realized_vol_20_norm",
-    "bid_ask_spread_frac",
-    "bid_depth_5_over_vol_sma_20",
-    "ask_depth_5_over_vol_sma_20",
-    "bid_ask_imbalance",
-    "price_vs_best_bid",
-    "eth_value_weight",
-    "hour_sin",
-    "hour_cos",
-    "dow_sin",
-    "dow_cos",
-    "dom_sin",
-    "dom_cos",
-    "usd_value_weight",
-]
+TRAIN_OBSERVATION_COLUMNS = OBSERVATION_COLUMNS
 
 
 class StepConsoleLogger(BaseCallback):
@@ -145,7 +108,15 @@ def run_training(total_timesteps: int, checkpoint_every: int) -> None:
         model = SAC.load(latest_checkpoint, env=env)
     else:
         print("[train] No checkpoint found; creating new SAC model.")
-        model = SAC("MlpPolicy", env, verbose=0)
+        model = SAC(
+            "MlpPolicy",
+            env,
+            verbose=0,
+            policy_kwargs=dict(net_arch=[512, 512, 256]),
+            buffer_size=50000,
+            learning_rate=1e-4,
+            learning_starts=200,
+        )
 
     callback = StepConsoleLogger()
     print(f"[train] Starting training loop for {total_timesteps} timesteps...")
