@@ -221,6 +221,10 @@ class KrakenLiveEnv(gym.Env):
                 break
             all_bars = batch + all_bars
             successful_pages += 1
+            print(
+                f"[buffer-init] Page {successful_pages} fetched: "
+                f"batch_rows={len(batch)}, cumulative_rows={len(all_bars)}"
+            )
             since = batch[0][0] - 60_000
             time.sleep(8)
         print(f"[buffer-init] Pages fetched: success={successful_pages}, failed={failed_pages}")
@@ -231,9 +235,16 @@ class KrakenLiveEnv(gym.Env):
         df = pd.DataFrame(all_bars, columns=BASE_OHLCV_COLUMNS)
         if df.empty:
             return df
+        rows_before_dedup = len(df)
         df.drop_duplicates(subset=["ts"], inplace=True)
+        print(
+            f"[buffer-init] drop_duplicates(subset=['ts']): "
+            f"before={rows_before_dedup}, after={len(df)}"
+        )
         df.sort_values("ts", inplace=True)
-        return df.tail(self.max_buffer_rows).reset_index(drop=True)
+        trimmed = df.tail(self.max_buffer_rows).reset_index(drop=True)
+        print(f"[buffer-init] Final retained rows after sort/tail: {len(trimmed)}")
+        return trimmed
 
     def _init_distant_anchors(self) -> dict[int, dict[str, float]]:
         anchors: dict[int, dict[str, float]] = {}

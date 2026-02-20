@@ -125,9 +125,14 @@ def run_training(total_timesteps: int, checkpoint_every: int) -> None:
         model.learn(total_timesteps=1, reset_num_timesteps=False, callback=callback)
 
         if step % 10 == 0:
-            ent_coef = "N/A"
-            if hasattr(model, "ent_coef_tensor") and model.ent_coef_tensor is not None:
-                ent_coef = f"{float(model.ent_coef_tensor.item()):.4f}"
+            ent_coef_value = None
+            if getattr(model, "ent_coef", None) == "auto":
+                if hasattr(model, "ent_coef_tensor") and model.ent_coef_tensor is not None:
+                    ent_coef_value = float(model.ent_coef_tensor.item())
+            elif getattr(model, "ent_coef", None) is not None:
+                ent_coef_value = float(model.ent_coef)
+
+            ent_coef = "N/A" if ent_coef_value is None else f"{ent_coef_value:.4f}"
 
             logged_metrics = getattr(model.logger, "name_to_value", {})
 
