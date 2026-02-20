@@ -198,54 +198,45 @@ class KrakenLiveEnv(gym.Env):
         self.logger.info("Rotated stale trading log to %s", archived)
 
     def _initialize_candle_buffer(self) -> pd.DataFrame:
-        all_bars: list[list[float]] = []
-        since = None
-        successful_pages = 0
-        failed_pages = 0
-        while len(all_bars) < self.max_buffer_rows:
-            print(f"[buffer-init] Requesting page {successful_pages + 1} with since={since}")
+        csv_path = "D:/ETHUSD_1.csv"
+
+        def _fetch_live_candles() -> list[list[float]]:
             try:
-                batch = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, since=since, limit=self.candle_limit)
+                bars = self.exchange.fetch_ohlcv("ETH/USD", "1m", limit=720)
                 self.consecutive_errors = 0
+                return bars
             except Exception as exc:
                 self._record_api_error(exc)
-                failed_pages += 1
-                rate_limit_hit = isinstance(exc, (ccxt.RateLimitExceeded, ccxt.DDoSProtection)) or (
-                    "rate limit" in str(exc).lower() or "429" in str(exc)
-                )
-                if rate_limit_hit:
-                    self.logger.warning("Rate limit hit during candle buffer initialization; retrying in 30 seconds.")
-                    time.sleep(30)
-                    continue
-                break
-            if not batch:
-                break
-            all_bars = batch + all_bars
-            successful_pages += 1
-            print(
-                f"[buffer-init] Page {successful_pages} fetched: "
-                f"batch_rows={len(batch)}, cumulative_rows={len(all_bars)}"
+                return []
+
+        if os.path.exists(csv_path):
+            csv_df = pd.read_csv(
+                csv_path,
+                header=0,
+                names=["ts", "open", "high", "low", "close", "vol", "trades"],
             )
-            pythonsince = batch[0][0] - (720 * 60 * 1000)
-            print(f"[buffer-init] Updated since for next page: {since}")
-            time.sleep(8)
-        print(f"[buffer-init] Pages fetched: success={successful_pages}, failed={failed_pages}")
-        if successful_pages < 10:
+            csv_df = csv_df.drop(columns=["trades"])
+            csv_df["ts"] = csv_df["ts"] * 1000
+
+            live_bars = _fetch_live_candles()
+            live_df = pd.DataFrame(live_bars, columns=BASE_OHLCV_COLUMNS)
+
+            merged = pd.concat([csv_df, live_df], ignore_index=True)
+            merged.drop_duplicates(subset=["ts"], inplace=True)
+            merged.sort_values("ts", inplace=True)
+            trimmed = merged.tail(40000).reset_index(drop=True)
             print(
-                "[buffer-init][WARNING] Candle buffer may be undersized: fewer than 10 pages fetched successfully."
+                f"[INIT] Loaded {len(csv_df)} rows from CSV + {len(live_df)} live candles = {len(trimmed)} total rows"
             )
-        df = pd.DataFrame(all_bars, columns=BASE_OHLCV_COLUMNS)
-        if df.empty:
-            return df
-        rows_before_dedup = len(df)
-        df.drop_duplicates(subset=["ts"], inplace=True)
-        print(
-            f"[buffer-init] drop_duplicates(subset=['ts']): "
-            f"before={rows_before_dedup}, after={len(df)}"
-        )
-        df.sort_values("ts", inplace=True)
-        trimmed = df.tail(self.max_buffer_rows).reset_index(drop=True)
-        print(f"[buffer-init] Final retained rows after sort/tail: {len(trimmed)}")
+            return trimmed
+
+        print("[INIT][WARNING] CSV not found at D:/ETHUSD_1.csv, loading API candles only.")
+        live_bars = _fetch_live_candles()
+        live_df = pd.DataFrame(live_bars, columns=BASE_OHLCV_COLUMNS)
+        live_df.drop_duplicates(subset=["ts"], inplace=True)
+        live_df.sort_values("ts", inplace=True)
+        trimmed = live_df.tail(40000).reset_index(drop=True)
+        print(f"[INIT] Loaded 0 rows from CSV + {len(live_df)} live candles = {len(trimmed)} total rows")
         return trimmed
 
     def _init_distant_anchors(self) -> dict[int, dict[str, float]]:
