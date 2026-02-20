@@ -698,7 +698,7 @@ class KrakenLiveEnv(gym.Env):
             bids, asks = [], []
 
         if not self.kill_switch and bids and asks:
-            if action_raw > 0.7:
+            if action_raw > 0.85:
                 quote_price = float(bids[0][0])
                 required = self.trade_size_eth * quote_price * (1.0 + MAKER_FEE)
                 if usd_balance >= required:
@@ -712,7 +712,7 @@ class KrakenLiveEnv(gym.Env):
                         forced_hold_reward = True
                 else:
                     self.last_action = "hold"
-            elif action_raw < -0.7 and eth_balance >= self.trade_size_eth:
+            elif action_raw < -0.85 and eth_balance >= self.trade_size_eth:
                 quote_price = float(asks[0][0])
                 trade_filled, filled_price, canceled = self._execute_limit_order("sell", quote_price)
                 if trade_filled:
@@ -747,6 +747,8 @@ class KrakenLiveEnv(gym.Env):
         else:
             self.last_action = "hold"
 
+        scaled_reward = reward * 100.0
+
         self.last_balance = portfolio_usd
         self.cumulative_reward += float(reward)
         self.last_obs = obs
@@ -766,7 +768,7 @@ class KrakenLiveEnv(gym.Env):
 
         self._append_log_row(action_raw, float(reward), current_price, portfolio_usd, eth_balance, usd_balance, obs)
 
-        return obs, float(reward), terminated, False, {
+        return obs, float(scaled_reward), terminated, False, {
             "action_taken": self.last_action,
             "portfolio_usd": portfolio_usd,
             "kill_switch": self.kill_switch,
