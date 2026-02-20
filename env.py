@@ -198,55 +198,52 @@ class KrakenLiveEnv(gym.Env):
         self.logger.info("Rotated stale trading log to %s", archived)
 
     def _initialize_candle_buffer(self) -> pd.DataFrame:
-        all_bars: list[list[float]] = []
-        since = None
-        successful_pages = 0
-        failed_pages = 0
-        while len(all_bars) < self.max_buffer_rows:
-            print(f"[buffer-init] Requesting page {successful_pages + 1} with since={since}")
+        cache_path = "./cache/ETH_USD_1min.csv"
+
+        def _fetch_recent_bars() -> pd.DataFrame:
+            bars = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, since=None, limit=720)
+            return pd.DataFrame(bars, columns=BASE_OHLCV_COLUMNS)
+
+        if os.path.exists(cache_path):
+            print(f"[buffer-init] Loading cached candles from {cache_path}")
             try:
-                batch = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, since=since, limit=self.candle_limit)
-                self.consecutive_errors = 0
-            except Exception as exc:
-                self._record_api_error(exc)
-                failed_pages += 1
-                rate_limit_hit = isinstance(exc, (ccxt.RateLimitExceeded, ccxt.DDoSProtection)) or (
-                    "rate limit" in str(exc).lower() or "429" in str(exc)
+                cached_df = pd.read_csv(cache_path)
+                if "timestamp" in cached_df.columns:
+                    cached_df["timestamp"] = pd.to_datetime(cached_df["timestamp"], utc=True, errors="coerce")
+                    cached_df.dropna(subset=["timestamp"], inplace=True)
+                    cached_df["ts"] = (cached_df["timestamp"].astype("int64") // 10**6).astype(np.int64)
+                elif "ts" not in cached_df.columns:
+                    raise ValueError("Cache file must include either 'timestamp' or 'ts' column.")
+
+                missing_cols = [col for col in BASE_OHLCV_COLUMNS if col not in cached_df.columns]
+                if missing_cols:
+                    raise ValueError(f"Cache file missing OHLCV columns: {missing_cols}")
+
+                live_df = _fetch_recent_bars()
+                combined = pd.concat([cached_df[BASE_OHLCV_COLUMNS], live_df], ignore_index=True)
+                combined.drop_duplicates(subset=["ts"], inplace=True)
+                combined.sort_values("ts", inplace=True)
+                combined = combined.tail(self.max_buffer_rows).reset_index(drop=True)
+                print(
+                    "[buffer-init] Cache + live merge complete: "
+                    f"cached_rows={len(cached_df)}, live_rows={len(live_df)}, retained_rows={len(combined)}"
                 )
-                if rate_limit_hit:
-                    self.logger.warning("Rate limit hit during candle buffer initialization; retrying in 30 seconds.")
-                    time.sleep(30)
-                    continue
-                break
-            if not batch:
-                break
-            all_bars = batch + all_bars
-            successful_pages += 1
-            print(
-                f"[buffer-init] Page {successful_pages} fetched: "
-                f"batch_rows={len(batch)}, cumulative_rows={len(all_bars)}"
-            )
-            pythonsince = batch[0][0] - (720 * 60 * 1000)
-            print(f"[buffer-init] Updated since for next page: {since}")
-            time.sleep(8)
-        print(f"[buffer-init] Pages fetched: success={successful_pages}, failed={failed_pages}")
-        if successful_pages < 10:
-            print(
-                "[buffer-init][WARNING] Candle buffer may be undersized: fewer than 10 pages fetched successfully."
-            )
-        df = pd.DataFrame(all_bars, columns=BASE_OHLCV_COLUMNS)
-        if df.empty:
-            return df
-        rows_before_dedup = len(df)
-        df.drop_duplicates(subset=["ts"], inplace=True)
+                return combined
+            except Exception as exc:
+                self.logger.warning("Failed loading candle cache from %s (%s). Falling back to API-only.", cache_path, exc)
+
         print(
-            f"[buffer-init] drop_duplicates(subset=['ts']): "
-            f"before={rows_before_dedup}, after={len(df)}"
+            "[buffer-init][WARNING] Local cache missing; using API-only startup with 720 bars. "
+            "For deeper history, download historical data from Kraken's support page."
         )
-        df.sort_values("ts", inplace=True)
-        trimmed = df.tail(self.max_buffer_rows).reset_index(drop=True)
-        print(f"[buffer-init] Final retained rows after sort/tail: {len(trimmed)}")
-        return trimmed
+        try:
+            fallback_df = _fetch_recent_bars()
+        except Exception as exc:
+            self._record_api_error(exc)
+            return pd.DataFrame(columns=BASE_OHLCV_COLUMNS)
+        fallback_df.drop_duplicates(subset=["ts"], inplace=True)
+        fallback_df.sort_values("ts", inplace=True)
+        return fallback_df.tail(self.max_buffer_rows).reset_index(drop=True)
 
     def _init_distant_anchors(self) -> dict[int, dict[str, float]]:
         anchors: dict[int, dict[str, float]] = {}
