@@ -168,6 +168,7 @@ class KrakenLiveEnv(gym.Env):
         self.last_filled_trade_step = 0
         self.position_entry_price: Optional[float] = None
         self.position_entry_step: Optional[int] = None
+        self.pending_order_id: Optional[str] = None
 
         self.df = self._initialize_candle_buffer()
         self.distant_anchors = self._init_distant_anchors()
@@ -521,19 +522,49 @@ class KrakenLiveEnv(gym.Env):
                 order = self.exchange.create_limit_sell_order(self.symbol, self.trade_size_eth, quoted_price)
 
             order_id = order.get("id")
+            self.pending_order_id = order_id
             latest_order = order
             for _ in range(6):
                 status = str(latest_order.get("status", "")).lower()
                 if status in {"closed", "filled"}:
+                    self.pending_order_id = None
                     return True, self._extract_fill_price(latest_order, quoted_price), False
                 time.sleep(5)
                 if hasattr(self.exchange, "fetch_order") and order_id:
                     latest_order = self.exchange.fetch_order(order_id, self.symbol)
-            if order_id and hasattr(self.exchange, "cancel_order"):
-                self.exchange.cancel_order(order_id, self.symbol)
-            return False, 0.0, True
+
+            if self.pending_order_id and hasattr(self.exchange, "fetch_order"):
+                latest_order = self.exchange.fetch_order(self.pending_order_id, self.symbol)
+                status = str(latest_order.get("status", "")).lower()
+                if status in {"closed", "filled"}:
+                    self.logger.debug(
+                        "Skipping cancel for order %s because it is already %s.",
+                        self.pending_order_id,
+                        status,
+                    )
+                    self.pending_order_id = None
+                    return False, 0.0, False
+                if status == "open" and hasattr(self.exchange, "cancel_order"):
+                    try:
+                        self.exchange.cancel_order(self.pending_order_id, self.symbol)
+                        self.pending_order_id = None
+                        return False, 0.0, True
+                    except Exception as exc:
+                        if "eorder:unknown order" in str(exc).lower():
+                            self.logger.debug(
+                                "Ignoring cancel for unknown order %s (likely already filled): %s",
+                                self.pending_order_id,
+                                exc,
+                            )
+                            self.pending_order_id = None
+                            return False, 0.0, False
+                        raise
+
+            self.pending_order_id = None
+            return False, 0.0, False
         except Exception as exc:
             self.logger.error("Limit order execution failed: %s", exc)
+            self.pending_order_id = None
             return False, 0.0, False
 
     def _maintenance_retry_fetch_ohlcv(self, **kwargs):
@@ -602,6 +633,7 @@ class KrakenLiveEnv(gym.Env):
         self.last_filled_trade_step = 0
         self.position_entry_price = None
         self.position_entry_step = None
+        self.pending_order_id = None
         self.kill_switch = False
         self.consecutive_errors = 0
 
