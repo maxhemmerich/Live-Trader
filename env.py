@@ -203,6 +203,7 @@ class KrakenLiveEnv(gym.Env):
         successful_pages = 0
         failed_pages = 0
         while len(all_bars) < self.max_buffer_rows:
+            print(f"[buffer-init] Requesting page {successful_pages + 1} with since={since}")
             try:
                 batch = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, since=since, limit=self.candle_limit)
                 self.consecutive_errors = 0
@@ -226,6 +227,7 @@ class KrakenLiveEnv(gym.Env):
                 f"batch_rows={len(batch)}, cumulative_rows={len(all_bars)}"
             )
             since = batch[0][0] - 60_000
+            print(f"[buffer-init] Updated since for next page: {since}")
             time.sleep(8)
         print(f"[buffer-init] Pages fetched: success={successful_pages}, failed={failed_pages}")
         if successful_pages < 10:
