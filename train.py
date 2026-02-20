@@ -124,6 +124,27 @@ def run_training(total_timesteps: int, checkpoint_every: int) -> None:
     for step in range(1, total_timesteps + 1):
         model.learn(total_timesteps=1, reset_num_timesteps=False, callback=callback)
 
+        if step % 10 == 0:
+            ent_coef = "N/A"
+            if hasattr(model, "ent_coef_tensor") and model.ent_coef_tensor is not None:
+                ent_coef = f"{float(model.ent_coef_tensor.item()):.4f}"
+
+            logged_metrics = getattr(model.logger, "name_to_value", {})
+
+            def metric_text(name: str) -> str:
+                value = logged_metrics.get(name)
+                if value is None:
+                    return "N/A"
+                return f"{float(value):.4f}"
+
+            print(
+                f"[SAC] step={step} "
+                f"| ent_coef={ent_coef} "
+                f"| actor_loss={metric_text('train/actor_loss')} "
+                f"| critic_loss={metric_text('train/critic_loss')} "
+                f"| entropy_loss={metric_text('train/entropy_loss')}"
+            )
+
         if checkpoint_every > 0 and step % checkpoint_every == 0:
             ckpt_path = env.save_checkpoint(model, step)
             print(f"[train] checkpoint saved: {ckpt_path}")
