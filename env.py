@@ -198,52 +198,46 @@ class KrakenLiveEnv(gym.Env):
         self.logger.info("Rotated stale trading log to %s", archived)
 
     def _initialize_candle_buffer(self) -> pd.DataFrame:
-        cache_path = "./cache/ETH_USD_1min.csv"
+        csv_path = "D:/ETHUSD_1.csv"
 
-        def _fetch_recent_bars() -> pd.DataFrame:
-            bars = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, since=None, limit=720)
-            return pd.DataFrame(bars, columns=BASE_OHLCV_COLUMNS)
-
-        if os.path.exists(cache_path):
-            print(f"[buffer-init] Loading cached candles from {cache_path}")
+        def _fetch_live_candles() -> list[list[float]]:
             try:
-                cached_df = pd.read_csv(cache_path)
-                if "timestamp" in cached_df.columns:
-                    cached_df["timestamp"] = pd.to_datetime(cached_df["timestamp"], utc=True, errors="coerce")
-                    cached_df.dropna(subset=["timestamp"], inplace=True)
-                    cached_df["ts"] = (cached_df["timestamp"].astype("int64") // 10**6).astype(np.int64)
-                elif "ts" not in cached_df.columns:
-                    raise ValueError("Cache file must include either 'timestamp' or 'ts' column.")
-
-                missing_cols = [col for col in BASE_OHLCV_COLUMNS if col not in cached_df.columns]
-                if missing_cols:
-                    raise ValueError(f"Cache file missing OHLCV columns: {missing_cols}")
-
-                live_df = _fetch_recent_bars()
-                combined = pd.concat([cached_df[BASE_OHLCV_COLUMNS], live_df], ignore_index=True)
-                combined.drop_duplicates(subset=["ts"], inplace=True)
-                combined.sort_values("ts", inplace=True)
-                combined = combined.tail(self.max_buffer_rows).reset_index(drop=True)
-                print(
-                    "[buffer-init] Cache + live merge complete: "
-                    f"cached_rows={len(cached_df)}, live_rows={len(live_df)}, retained_rows={len(combined)}"
-                )
-                return combined
+                bars = self.exchange.fetch_ohlcv("ETH/USD", "1m", limit=720)
+                self.consecutive_errors = 0
+                return bars
             except Exception as exc:
-                self.logger.warning("Failed loading candle cache from %s (%s). Falling back to API-only.", cache_path, exc)
+                self._record_api_error(exc)
+                return []
 
-        print(
-            "[buffer-init][WARNING] Local cache missing; using API-only startup with 720 bars. "
-            "For deeper history, download historical data from Kraken's support page."
-        )
-        try:
-            fallback_df = _fetch_recent_bars()
-        except Exception as exc:
-            self._record_api_error(exc)
-            return pd.DataFrame(columns=BASE_OHLCV_COLUMNS)
-        fallback_df.drop_duplicates(subset=["ts"], inplace=True)
-        fallback_df.sort_values("ts", inplace=True)
-        return fallback_df.tail(self.max_buffer_rows).reset_index(drop=True)
+        if os.path.exists(csv_path):
+            csv_df = pd.read_csv(
+                csv_path,
+                header=0,
+                names=["ts", "open", "high", "low", "close", "vol", "trades"],
+            )
+            csv_df = csv_df.drop(columns=["trades"])
+            csv_df["ts"] = csv_df["ts"] * 1000
+
+            live_bars = _fetch_live_candles()
+            live_df = pd.DataFrame(live_bars, columns=BASE_OHLCV_COLUMNS)
+
+            merged = pd.concat([csv_df, live_df], ignore_index=True)
+            merged.drop_duplicates(subset=["ts"], inplace=True)
+            merged.sort_values("ts", inplace=True)
+            trimmed = merged.tail(40000).reset_index(drop=True)
+            print(
+                f"[INIT] Loaded {len(csv_df)} rows from CSV + {len(live_df)} live candles = {len(trimmed)} total rows"
+            )
+            return trimmed
+
+        print("[INIT][WARNING] CSV not found at D:/ETHUSD_1.csv, loading API candles only.")
+        live_bars = _fetch_live_candles()
+        live_df = pd.DataFrame(live_bars, columns=BASE_OHLCV_COLUMNS)
+        live_df.drop_duplicates(subset=["ts"], inplace=True)
+        live_df.sort_values("ts", inplace=True)
+        trimmed = live_df.tail(40000).reset_index(drop=True)
+        print(f"[INIT] Loaded 0 rows from CSV + {len(live_df)} live candles = {len(trimmed)} total rows")
+        return trimmed
 
     def _init_distant_anchors(self) -> dict[int, dict[str, float]]:
         anchors: dict[int, dict[str, float]] = {}
