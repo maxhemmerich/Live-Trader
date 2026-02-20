@@ -226,7 +226,7 @@ class KrakenLiveEnv(gym.Env):
                 f"[buffer-init] Page {successful_pages} fetched: "
                 f"batch_rows={len(batch)}, cumulative_rows={len(all_bars)}"
             )
-            since = batch[0][0] - (720 * 60000)
+            pythonsince = batch[0][0] - (720 * 60 * 1000)
             print(f"[buffer-init] Updated since for next page: {since}")
             time.sleep(8)
         print(f"[buffer-init] Pages fetched: success={successful_pages}, failed={failed_pages}")
