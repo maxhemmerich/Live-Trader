@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 import gymnasium as gym
@@ -48,14 +49,39 @@ class KrakenBacktestEnv(gym.Env):
         self.max_buffer_rows = int(max_buffer_rows)
         self.trade_size_eth = 0.001
 
-        raw_df = pd.read_csv(
+        print(f"[KrakenBacktestEnv] Starting init for CSV: {self.csv_path}")
+        load_start_time = time.perf_counter()
+        csv_columns = ["timestamp", "open", "high", "low", "close", "volume"]
+        csv_dtypes = {
+            "timestamp": "int64",
+            "open": "float32",
+            "high": "float32",
+            "low": "float32",
+            "close": "float32",
+            "volume": "float32",
+        }
+        chunk_size = 500_000
+
+        chunks: list[pd.DataFrame] = []
+        total_rows_loaded = 0
+        for chunk in pd.read_csv(
             self.csv_path,
-            header=0,
-            names=["ts", "open", "high", "low", "close", "vol", "trades"],
+            usecols=csv_columns,
+            dtype=csv_dtypes,
+            chunksize=chunk_size,
+        ):
+            chunk = chunk.rename(columns={"timestamp": "ts", "volume": "vol"})
+            chunk["ts"] = chunk["ts"] * 1000
+            chunks.append(chunk)
+            total_rows_loaded += len(chunk)
+            print(f"[KrakenBacktestEnv] Loaded {total_rows_loaded:,} rows...")
+
+        self.full_df = pd.concat(chunks, ignore_index=True) if chunks else pd.DataFrame(columns=["ts", "open", "high", "low", "close", "vol"])
+        load_duration_seconds = time.perf_counter() - load_start_time
+        print(
+            f"[KrakenBacktestEnv] Completed load: {total_rows_loaded:,} rows "
+            f"in {load_duration_seconds:.2f}s"
         )
-        raw_df = raw_df.drop(columns=["trades"])
-        raw_df["ts"] = raw_df["ts"] * 1000
-        self.full_df = raw_df.reset_index(drop=True)
 
         self._validate_data_requirements()
 
