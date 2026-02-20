@@ -200,18 +200,34 @@ class KrakenLiveEnv(gym.Env):
     def _initialize_candle_buffer(self) -> pd.DataFrame:
         all_bars: list[list[float]] = []
         since = None
+        successful_pages = 0
+        failed_pages = 0
         while len(all_bars) < self.max_buffer_rows:
             try:
                 batch = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, since=since, limit=self.candle_limit)
                 self.consecutive_errors = 0
             except Exception as exc:
                 self._record_api_error(exc)
+                failed_pages += 1
+                rate_limit_hit = isinstance(exc, (ccxt.RateLimitExceeded, ccxt.DDoSProtection)) or (
+                    "rate limit" in str(exc).lower() or "429" in str(exc)
+                )
+                if rate_limit_hit:
+                    self.logger.warning("Rate limit hit during candle buffer initialization; retrying in 30 seconds.")
+                    time.sleep(30)
+                    continue
                 break
             if not batch:
                 break
             all_bars = batch + all_bars
+            successful_pages += 1
             since = batch[0][0] - 60_000
-            time.sleep(1)
+            time.sleep(8)
+        print(f"[buffer-init] Pages fetched: success={successful_pages}, failed={failed_pages}")
+        if successful_pages < 10:
+            print(
+                "[buffer-init][WARNING] Candle buffer may be undersized: fewer than 10 pages fetched successfully."
+            )
         df = pd.DataFrame(all_bars, columns=BASE_OHLCV_COLUMNS)
         if df.empty:
             return df
