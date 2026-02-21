@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from gymnasium import spaces
 from ta.momentum import RSIIndicator, StochasticOscillator, WilliamsRIndicator
-from ta.trend import ADXIndicator, CCIIndicator, EMAIndicator, MACD
+from ta.trend import CCIIndicator, EMAIndicator, MACD
 from ta.volatility import AverageTrueRange, BollingerBands
 from ta.volume import OnBalanceVolumeIndicator
 
@@ -139,6 +139,33 @@ class KrakenBacktestEnv(gym.Env):
             return float(np.tanh(value * 5.0))
         return value
 
+    def _fast_adx(self, high, low, close, window: int = 14) -> pd.Series:
+        high = np.array(high)
+        low = np.array(low)
+        close = np.array(close)
+        tr = np.maximum(
+            high[1:] - low[1:],
+            np.maximum(np.abs(high[1:] - close[:-1]), np.abs(low[1:] - close[:-1])),
+        )
+        dm_pos = np.where(
+            (high[1:] - high[:-1]) > (low[:-1] - low[1:]),
+            np.maximum(high[1:] - high[:-1], 0),
+            0,
+        )
+        dm_neg = np.where(
+            (low[:-1] - low[1:]) > (high[1:] - high[:-1]),
+            np.maximum(low[:-1] - low[1:], 0),
+            0,
+        )
+        atr = pd.Series(tr).ewm(span=window, adjust=False).mean()
+        di_pos = 100 * pd.Series(dm_pos).ewm(span=window, adjust=False).mean() / (atr + 1e-8)
+        di_neg = 100 * pd.Series(dm_neg).ewm(span=window, adjust=False).mean() / (atr + 1e-8)
+        dx = 100 * np.abs(di_pos - di_neg) / (di_pos + di_neg + 1e-8)
+        adx = dx.ewm(span=window, adjust=False).mean()
+        result = pd.Series(np.nan, index=range(len(close)))
+        result.iloc[1:] = adx.values
+        return result / 100.0
+
     def _precompute_indicators(self) -> None:
         if self.df.empty:
             return
@@ -162,7 +189,7 @@ class KrakenBacktestEnv(gym.Env):
         self.df["willr_14_norm"] = (
             WilliamsRIndicator(high=high, low=low, close=close, lbp=14).williams_r() + 100.0
         ) / 100.0
-        self.df["adx_14_norm"] = ADXIndicator(high=high, low=low, close=close, window=14).adx() / 100.0
+        self.df["adx_14_norm"] = self._fast_adx(high, low, close, window=14)
 
         bb20 = BollingerBands(close=close, window=20, window_dev=2)
         bb50 = BollingerBands(close=close, window=50, window_dev=2)
@@ -281,7 +308,10 @@ class KrakenBacktestEnv(gym.Env):
         self.window_end_idx = start_idx + self.episode_length
         self.df = self.full_df.iloc[self.window_start_idx : self.window_end_idx + 1].copy().reset_index(drop=True)
         self.current_pos = start_idx - self.window_start_idx
+        precompute_start_time = time.perf_counter()
         self._precompute_indicators()
+        precompute_duration_seconds = time.perf_counter() - precompute_start_time
+        print(f"[KrakenBacktestEnv] Precompute completed in {precompute_duration_seconds:.2f}s")
 
         self.usd_balance = self.initial_usd
         self.eth_balance = self.initial_eth
