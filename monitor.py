@@ -112,31 +112,17 @@ col5.metric(
 st.markdown("---")
 
 # ── Line charts ────────────────────────────────────────────────────────────
-st.subheader("Portfolio Value Over Time")
-portfolio_chart = px.line(
-    df,
-    x="timestamp",
-    y="portfolio_usd",
-    range_y=[df["portfolio_usd"].min(), df["portfolio_usd"].max()],
-)
-st.plotly_chart(portfolio_chart, width='stretch')
+fig1 = px.line(df, x="timestamp", y="portfolio_usd", title="Portfolio Value Over Time")
+fig1.update_layout(yaxis=dict(range=[df["portfolio_usd"].min(), df["portfolio_usd"].max()]))
+st.plotly_chart(fig1, width="stretch")
 
-st.subheader("Action Signal Over Time")
-action_chart = px.line(
-    df,
-    x="step",
-    y="action_raw",
-)
-st.plotly_chart(action_chart, width='stretch')
+fig2 = px.line(df, x="step", y="action_raw", title="Action Signal Over Time")
+fig2.update_layout(yaxis=dict(range=[-1, 1]))
+st.plotly_chart(fig2, width="stretch")
 
-st.subheader("ETH/USD Price Over Time")
-price_chart = px.line(
-    df,
-    x="timestamp",
-    y="eth_price",
-    range_y=[df["eth_price"].min(), df["eth_price"].max()],
-)
-st.plotly_chart(price_chart, width='stretch')
+fig3 = px.line(df, x="timestamp", y="eth_price", title="ETH/USD Price Over Time")
+fig3.update_layout(yaxis=dict(range=[df["eth_price"].min(), df["eth_price"].max()]))
+st.plotly_chart(fig3, width="stretch")
 
 # ── Recent trades ──────────────────────────────────────────────────────────
 st.subheader("Recent Trades (Last 20 Steps)")
