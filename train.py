@@ -103,11 +103,16 @@ def run_training(total_timesteps: int, checkpoint_every: int) -> None:
     print(f"[train] Candle buffer initialized with {len(env.df)} rows.")
 
     latest_checkpoint = env.get_latest_checkpoint()
+    pretrained_checkpoint = os.path.join(env.checkpoint_dir, "pretrained_sac.zip")
+
     if latest_checkpoint and os.path.exists(latest_checkpoint):
-        print(f"[train] Loading latest checkpoint: {latest_checkpoint}")
+        print(f"[train] Model source: live checkpoint ({latest_checkpoint})")
         model = SAC.load(latest_checkpoint, env=env)
+    elif os.path.exists(pretrained_checkpoint):
+        print(f"[train] Model source: pretrained checkpoint ({pretrained_checkpoint})")
+        model = SAC.load(pretrained_checkpoint, env=env)
     else:
-        print("[train] No checkpoint found; creating new SAC model.")
+        print("[train] Model source: fresh initialization (no live or pretrained checkpoint found)")
         model = SAC(
             "MlpPolicy",
             env,
