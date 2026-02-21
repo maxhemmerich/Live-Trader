@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 import numpy as np
@@ -19,10 +20,14 @@ class BacktestProgressCallback(BaseCallback):
     def __init__(self, print_every: int = 10_000) -> None:
         super().__init__()
         self.print_every = int(print_every)
+        self.start_time = 0.0
         self.episode_count = 0
         self.completed_episode_rewards: list[float] = []
         self.running_episode_reward = 0.0
         self.latest_portfolio = float("nan")
+
+    def _on_training_start(self) -> None:
+        self.start_time = time.perf_counter()
 
     def _on_step(self) -> bool:
         reward = float(self.locals["rewards"][0])
@@ -39,16 +44,16 @@ class BacktestProgressCallback(BaseCallback):
             self.running_episode_reward = 0.0
 
         if self.num_timesteps % self.print_every == 0:
+            elapsed_seconds = time.perf_counter() - self.start_time
             mean_reward = (
                 float(np.mean(self.completed_episode_rewards))
                 if self.completed_episode_rewards
                 else 0.0
             )
             print(
-                f"[pretrain] step={self.num_timesteps} "
-                f"episodes={self.episode_count} "
-                f"mean_reward_per_episode={mean_reward:+.6f} "
-                f"final_portfolio_value={self.latest_portfolio:.6f}"
+                f"[pretrain] steps_completed={self.num_timesteps} "
+                f"time_elapsed={elapsed_seconds:.1f}s "
+                f"mean_reward={mean_reward:+.6f}"
             )
 
         return True
@@ -67,13 +72,13 @@ def main() -> None:
         "MlpPolicy",
         env,
         verbose=0,
-        policy_kwargs=dict(net_arch=[512, 512, 256]),
+        policy_kwargs=dict(net_arch=[64, 64]),
         buffer_size=50000,
         learning_rate=1e-4,
         learning_starts=200,
     )
 
-    callback = BacktestProgressCallback(print_every=10_000)
+    callback = BacktestProgressCallback(print_every=1_000)
     model.learn(total_timesteps=500_000, callback=callback)
 
     os.makedirs("./checkpoints", exist_ok=True)
