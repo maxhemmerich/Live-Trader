@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 from stable_baselines3 import SAC
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, CallbackList, CheckpointCallback
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from backtest_env import KrakenBacktestEnv
@@ -59,6 +59,34 @@ class BacktestProgressCallback(BaseCallback):
         return True
 
 
+class RotatingCheckpointCallback(CheckpointCallback):
+    """Save periodic checkpoints and keep only the most recent files."""
+
+    def __init__(self, save_freq: int, save_path: str, name_prefix: str, max_checkpoints: int = 3) -> None:
+        super().__init__(save_freq=save_freq, save_path=save_path, name_prefix=name_prefix)
+        self.max_checkpoints = int(max_checkpoints)
+
+    def _checkpoint_path(self, checkpoint_type: str = "", extension: str = "") -> str:
+        return os.path.join(self.save_path, f"{self.name_prefix}_{self.n_calls}.{extension}")
+
+    def _on_step(self) -> bool:
+        continue_training = super()._on_step()
+        if self.n_calls % self.save_freq == 0:
+            checkpoints = sorted(
+                [
+                    file_name
+                    for file_name in os.listdir(self.save_path)
+                    if file_name.startswith(f"{self.name_prefix}_") and file_name.endswith(".zip")
+                ],
+                key=lambda file_name: int(file_name.removesuffix(".zip").split("_")[-1]),
+            )
+            old_checkpoints = checkpoints[:-self.max_checkpoints]
+            for checkpoint in old_checkpoints:
+                os.remove(os.path.join(self.save_path, checkpoint))
+
+        return continue_training
+
+
 def main() -> None:
     env = DummyVecEnv([
         lambda: KrakenBacktestEnv(
@@ -78,7 +106,15 @@ def main() -> None:
         learning_starts=200,
     )
 
-    callback = BacktestProgressCallback(print_every=1_000)
+    callback = CallbackList([
+        BacktestProgressCallback(print_every=1_000),
+        RotatingCheckpointCallback(
+            save_freq=10_000,
+            save_path="./checkpoints",
+            name_prefix="pretrain_checkpoint",
+            max_checkpoints=3,
+        ),
+    ])
     model.learn(total_timesteps=500_000, callback=callback)
 
     os.makedirs("./checkpoints", exist_ok=True)
