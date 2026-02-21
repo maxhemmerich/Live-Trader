@@ -15,6 +15,7 @@ Features:
 
 import os
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
@@ -112,13 +113,30 @@ st.markdown("---")
 
 # ── Line charts ────────────────────────────────────────────────────────────
 st.subheader("Portfolio Value Over Time")
-st.line_chart(df.set_index("timestamp")[["portfolio_usd"]], width='stretch')
+portfolio_chart = px.line(
+    df,
+    x="timestamp",
+    y="portfolio_usd",
+    range_y=[df["portfolio_usd"].min(), df["portfolio_usd"].max()],
+)
+st.plotly_chart(portfolio_chart, width='stretch')
 
 st.subheader("Action Signal Over Time")
-st.line_chart(df.set_index("timestamp")[["action_raw"]], width='stretch')
+action_chart = px.line(
+    df,
+    x="step",
+    y="action_raw",
+)
+st.plotly_chart(action_chart, width='stretch')
 
 st.subheader("ETH/USD Price Over Time")
-st.line_chart(df.set_index("timestamp")[["eth_price"]], width='stretch')
+price_chart = px.line(
+    df,
+    x="timestamp",
+    y="eth_price",
+    range_y=[df["eth_price"].min(), df["eth_price"].max()],
+)
+st.plotly_chart(price_chart, width='stretch')
 
 # ── Recent trades ──────────────────────────────────────────────────────────
 st.subheader("Recent Trades (Last 20 Steps)")

@@ -7,4 +7,5 @@ torch
 python-dotenv
 streamlit
 streamlit-autorefresh
+plotly
 numpy
