@@ -89,6 +89,9 @@ class KrakenBacktestEnv(gym.Env):
         )
 
         self.df = pd.DataFrame(columns=["ts", "open", "high", "low", "close", "vol"])
+        self.window_start_idx = 0
+        self.window_end_idx = 0
+        self.current_pos = 0
         self.current_idx = 0
         self.steps_in_episode = 0
         self.step_count = 0
@@ -120,62 +123,77 @@ class KrakenBacktestEnv(gym.Env):
         return float((eth_balance * price) + usd_balance)
 
     def _lag_price_vol(self, n: int, close_now: float, vol_now: float) -> tuple[float, float]:
-        if len(self.df) < n + 1:
+        if self.current_pos < n:
             return 0.0, 0.0
-        c_prev = float(self.df["close"].iloc[-(n + 1)])
-        v_prev = float(self.df["vol"].iloc[-(n + 1)])
+        c_prev = float(self.df["close"].iloc[self.current_pos - n])
+        v_prev = float(self.df["vol"].iloc[self.current_pos - n])
         ret = np.tanh(((close_now - c_prev) / (c_prev + 1e-8)) * 5.0)
         vol_ret = np.tanh(((vol_now - v_prev) / (v_prev + 1e-8)) * 5.0)
         return float(ret), float(vol_ret)
 
-    def _series_lag_value(self, series: pd.Series, n: int, transform: str = "none") -> float:
-        if len(series) < n + 1:
+    def _series_lag_value(self, column: str, n: int, transform: str = "none") -> float:
+        if self.current_pos < n:
             return 0.0
-        value = float(series.iloc[-(n + 1)])
+        value = float(self.df[column].iloc[self.current_pos - n])
         if transform == "tanh":
             return float(np.tanh(value * 5.0))
         return value
 
-    def _compute_observation(self, usd_balance: float, eth_balance: float) -> np.ndarray:
-        df = self.df.copy()
-        if df.empty:
-            return np.zeros((OBSERVATION_SIZE,), dtype=np.float32)
+    def _precompute_indicators(self) -> None:
+        if self.df.empty:
+            return
 
-        close = df["close"]
-        vol = df["vol"]
-        high = df["high"]
-        low = df["low"]
+        close = self.df["close"]
+        vol = self.df["vol"]
+        high = self.df["high"]
+        low = self.df["low"]
 
-        rsi7 = RSIIndicator(close=close, window=7).rsi() / 100.0
-        rsi14 = RSIIndicator(close=close, window=14).rsi() / 100.0
-        rsi21 = RSIIndicator(close=close, window=21).rsi() / 100.0
+        self.df["rsi_7_norm"] = RSIIndicator(close=close, window=7).rsi() / 100.0
+        self.df["rsi_14_norm"] = RSIIndicator(close=close, window=14).rsi() / 100.0
+        self.df["rsi_21_norm"] = RSIIndicator(close=close, window=21).rsi() / 100.0
+
         stoch = StochasticOscillator(high=high, low=low, close=close, window=14, smooth_window=3)
-        stoch_k = stoch.stoch() / 100.0
-        stoch_d = stoch.stoch_signal() / 100.0
-        cci20 = (CCIIndicator(high=high, low=low, close=close, window=20).cci() / 200.0).clip(-1.0, 1.0)
-        willr = (WilliamsRIndicator(high=high, low=low, close=close, lbp=14).williams_r() + 100.0) / 100.0
-        adx14 = ADXIndicator(high=high, low=low, close=close, window=14).adx() / 100.0
+        self.df["stoch_k_norm"] = stoch.stoch() / 100.0
+        self.df["stoch_d_norm"] = stoch.stoch_signal() / 100.0
+
+        self.df["cci_20_clipped"] = (
+            CCIIndicator(high=high, low=low, close=close, window=20).cci() / 200.0
+        ).clip(-1.0, 1.0)
+        self.df["willr_14_norm"] = (
+            WilliamsRIndicator(high=high, low=low, close=close, lbp=14).williams_r() + 100.0
+        ) / 100.0
+        self.df["adx_14_norm"] = ADXIndicator(high=high, low=low, close=close, window=14).adx() / 100.0
+
         bb20 = BollingerBands(close=close, window=20, window_dev=2)
         bb50 = BollingerBands(close=close, window=50, window_dev=2)
-        bb20_p = bb20.bollinger_pband()
+        self.df["bb20_p"] = bb20.bollinger_pband()
 
         atr14 = AverageTrueRange(high=high, low=low, close=close, window=14).average_true_range()
-        atr14_over_price = atr14 / (close + 1e-8)
-        one_ret = close.pct_change()
-        realized_vol_20 = one_ret.rolling(20).std() / 0.02
+        self.df["atr_14_over_price"] = atr14 / (close + 1e-8)
+        self.df["realized_vol_20_norm"] = close.pct_change().rolling(20).std() / 0.02
 
         ema9 = EMAIndicator(close=close, window=9).ema_indicator()
         ema20 = EMAIndicator(close=close, window=20).ema_indicator()
         ema50 = EMAIndicator(close=close, window=50).ema_indicator()
         ema200 = EMAIndicator(close=close, window=200).ema_indicator()
         macd_hist = MACD(close=close, window_fast=12, window_slow=26, window_sign=9).macd_diff()
-        bb20_width = (bb20.bollinger_hband() - bb20.bollinger_lband()) / (close + 1e-8)
-        bb50_width = (bb50.bollinger_hband() - bb50.bollinger_lband()) / (close + 1e-8)
         obv = OnBalanceVolumeIndicator(close=close, volume=vol).on_balance_volume()
-        obv_pct = obv.pct_change()
 
-        current_price = float(close.iloc[-1])
-        current_vol = float(vol.iloc[-1])
+        self.df["ema9"] = (close / (ema9 + 1e-8)) - 1.0
+        self.df["ema20"] = (close / (ema20 + 1e-8)) - 1.0
+        self.df["ema50"] = (close / (ema50 + 1e-8)) - 1.0
+        self.df["ema200"] = (close / (ema200 + 1e-8)) - 1.0
+        self.df["macd_hist_atr"] = macd_hist / (atr14 + 1e-8)
+        self.df["bb20_width_price"] = (bb20.bollinger_hband() - bb20.bollinger_lband()) / (close + 1e-8)
+        self.df["bb50_width_price"] = (bb50.bollinger_hband() - bb50.bollinger_lband()) / (close + 1e-8)
+        self.df["obv_pct_change"] = obv.pct_change()
+
+    def _compute_observation(self, usd_balance: float, eth_balance: float) -> np.ndarray:
+        if self.df.empty:
+            return np.zeros((OBSERVATION_SIZE,), dtype=np.float32)
+        row = self.df.iloc[self.current_pos]
+        current_price = float(row["close"])
+        current_vol = float(row["vol"])
 
         price_lags, vol_lags = [], []
         for n in LAG_VALUES:
@@ -184,35 +202,23 @@ class KrakenBacktestEnv(gym.Env):
             vol_lags.append(v)
 
         scalar_features = [
-            float(rsi7.iloc[-1]),
-            float(rsi14.iloc[-1]),
-            float(rsi21.iloc[-1]),
-            float(stoch_k.iloc[-1]),
-            float(stoch_d.iloc[-1]),
-            float(cci20.iloc[-1]),
-            float(willr.iloc[-1]),
-            float(adx14.iloc[-1]),
-            float(bb20_p.iloc[-1]),
-            float(atr14_over_price.iloc[-1]),
-            float(realized_vol_20.iloc[-1]),
+            float(row["rsi_7_norm"]),
+            float(row["rsi_14_norm"]),
+            float(row["rsi_21_norm"]),
+            float(row["stoch_k_norm"]),
+            float(row["stoch_d_norm"]),
+            float(row["cci_20_clipped"]),
+            float(row["willr_14_norm"]),
+            float(row["adx_14_norm"]),
+            float(row["bb20_p"]),
+            float(row["atr_14_over_price"]),
+            float(row["realized_vol_20_norm"]),
         ]
-
-        series_map = {
-            "ema9": (close / (ema9 + 1e-8)) - 1.0,
-            "ema20": (close / (ema20 + 1e-8)) - 1.0,
-            "ema50": (close / (ema50 + 1e-8)) - 1.0,
-            "ema200": (close / (ema200 + 1e-8)) - 1.0,
-            "macd_hist_atr": macd_hist / (atr14 + 1e-8),
-            "bb20_width_price": bb20_width,
-            "bb50_width_price": bb50_width,
-            "obv_pct_change": obv_pct,
-        }
 
         trend_lags: list[float] = []
         for prefix in TREND_PREFIXES:
-            series = series_map[prefix]
             for n in LAG_VALUES:
-                trend_lags.append(self._series_lag_value(series, n, transform="tanh"))
+                trend_lags.append(self._series_lag_value(prefix, n, transform="tanh"))
 
         # Historical-only backtest: no order book API calls, so keep these as zeros.
         order_book_features = [0.0] * 5
@@ -232,7 +238,7 @@ class KrakenBacktestEnv(gym.Env):
 
         self_awareness = [last_action_map.get(self.last_action, 0.0), float(bars_since_trade), float(pos_ret)]
 
-        ts = pd.to_datetime(int(df.iloc[-1]["ts"]), unit="ms", utc=True)
+        ts = pd.to_datetime(int(row["ts"]), unit="ms", utc=True)
         hour = ts.hour
         dow = ts.dayofweek
         dom = ts.day
@@ -271,7 +277,11 @@ class KrakenBacktestEnv(gym.Env):
             start_idx = int(self.np_random.integers(min_start_idx, max_start_idx + 1))
 
         self.current_idx = start_idx
-        self.df = self.full_df.iloc[start_idx - self.max_buffer_rows + 1 : start_idx + 1].copy().reset_index(drop=True)
+        self.window_start_idx = start_idx - self.max_buffer_rows + 1
+        self.window_end_idx = start_idx + self.episode_length
+        self.df = self.full_df.iloc[self.window_start_idx : self.window_end_idx + 1].copy().reset_index(drop=True)
+        self.current_pos = start_idx - self.window_start_idx
+        self._precompute_indicators()
 
         self.usd_balance = self.initial_usd
         self.eth_balance = self.initial_eth
@@ -283,7 +293,7 @@ class KrakenBacktestEnv(gym.Env):
         self.position_entry_price = None
         self.position_entry_step = None
 
-        current_price = float(self.df.iloc[-1]["close"])
+        current_price = float(self.df.iloc[self.current_pos]["close"])
         self.starting_portfolio_usd = self._get_portfolio_value(self.eth_balance, self.usd_balance, current_price)
         self.last_balance = self.starting_portfolio_usd
 
@@ -296,10 +306,12 @@ class KrakenBacktestEnv(gym.Env):
         self.last_action = "hold"
 
         next_idx = self.current_idx + 1
-        if next_idx >= len(self.full_df):
+        if next_idx > self.window_end_idx or next_idx >= len(self.full_df):
             return self.last_obs.copy(), 0.0, True, False, {"action_taken": "hold", "portfolio_usd": self.last_balance}
 
-        next_bar = self.full_df.iloc[next_idx]
+        self.current_idx = next_idx
+        self.current_pos += 1
+        next_bar = self.df.iloc[self.current_pos]
         execution_price = float(next_bar["open"])
 
         trade_filled = False
@@ -327,10 +339,7 @@ class KrakenBacktestEnv(gym.Env):
             self.position_entry_step = None
             self.last_filled_trade_step = self.step_count + 1
 
-        self.current_idx = next_idx
-        self.df = pd.concat([self.df, pd.DataFrame([next_bar])], ignore_index=True).tail(self.max_buffer_rows).reset_index(drop=True)
-
-        current_price = float(self.df.iloc[-1]["close"])
+        current_price = float(next_bar["close"])
         obs = self._compute_observation(self.usd_balance, self.eth_balance)
         portfolio_usd = self._get_portfolio_value(self.eth_balance, self.usd_balance, current_price)
 
@@ -339,8 +348,8 @@ class KrakenBacktestEnv(gym.Env):
         if trade_filled:
             reward -= MAKER_FEE
 
-        if len(self.df) >= 6:
-            price_change_5 = current_price - float(self.df["close"].iloc[-6])
+        if self.current_pos >= 5:
+            price_change_5 = current_price - float(self.df["close"].iloc[self.current_pos - 5])
             if price_change_5 > 0 and self.eth_balance > 0:
                 reward += SHAPE_BONUS
             elif price_change_5 < 0 and self.usd_balance > 0:
