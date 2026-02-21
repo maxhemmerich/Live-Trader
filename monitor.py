@@ -84,6 +84,21 @@ current_action   = latest["action_taken"]
 current_price    = latest["eth_price"]
 total_steps      = len(df)
 
+time_span_hours = 0.0
+if len(df) > 1:
+    time_span_seconds = (df["timestamp"].max() - df["timestamp"].min()).total_seconds()
+    time_span_hours = time_span_seconds / 3600 if time_span_seconds > 0 else 0.0
+
+trade_count = int((df["action_taken"] != "hold").sum())
+trade_frequency = (trade_count / time_span_hours) if time_span_hours > 0 else 0.0
+
+action_counts = (
+    df["action_taken"]
+    .value_counts()
+    .reindex(["buy", "sell", "hold"], fill_value=0)
+)
+action_percentages = ((action_counts / total_steps) * 100.0) if total_steps > 0 else action_counts * 0
+
 col1, col2, col3, col4, col5 = st.columns(5)
 
 col1.metric(
@@ -109,6 +124,27 @@ col5.metric(
     value = f"{total_steps:,}",
 )
 
+st.markdown("<div style='height: 0.75rem;'></div>", unsafe_allow_html=True)
+
+col6, col7, col8, col9 = st.columns(4)
+
+col6.metric(
+    label = "Trade Frequency",
+    value = f"{trade_frequency:.1f} trades/hr",
+)
+col7.metric(
+    label = "Buy",
+    value = f"{action_counts['buy']:,} ({action_percentages['buy']:.0f}%)",
+)
+col8.metric(
+    label = "Sell",
+    value = f"{action_counts['sell']:,} ({action_percentages['sell']:.0f}%)",
+)
+col9.metric(
+    label = "Hold",
+    value = f"{action_counts['hold']:,} ({action_percentages['hold']:.0f}%)",
+)
+
 st.markdown("---")
 
 # ── Line charts ────────────────────────────────────────────────────────────
@@ -116,7 +152,10 @@ fig1 = px.line(df, x="timestamp", y="portfolio_usd", title="Portfolio Value Over
 fig1.update_layout(yaxis=dict(range=[df["portfolio_usd"].min(), df["portfolio_usd"].max()]))
 st.plotly_chart(fig1, width="stretch")
 
-fig2 = px.line(df, x="step", y="action_raw", title="Action Signal Over Time")
+df_plot = df.copy()
+df_plot["action_smoothed"] = df_plot["action_raw"].rolling(window=20, min_periods=1).mean()
+
+fig2 = px.line(df_plot, x="step", y="action_smoothed", title="Action Signal Trend (Rolling Mean, Window=20)")
 fig2.update_layout(yaxis=dict(range=[-1, 1]))
 st.plotly_chart(fig2, width="stretch")
 
