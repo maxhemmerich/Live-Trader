@@ -378,7 +378,8 @@ class KrakenBacktestEnv(gym.Env):
         if trade_filled:
             reward -= MAKER_FEE
 
-        if self.current_pos >= 5:
+        # Keep reward shaping aligned with KrakenLiveEnv.step().
+        if len(self.df) >= 6:
             price_change_5 = current_price - float(self.df["close"].iloc[self.current_pos - 5])
             if price_change_5 > 0 and self.eth_balance > 0:
                 reward += SHAPE_BONUS
