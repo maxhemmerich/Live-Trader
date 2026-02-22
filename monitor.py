@@ -276,6 +276,43 @@ fig3.update_yaxes(title_text="ETH/USD Price", secondary_y=False)
 fig3.update_yaxes(title_text="Action Signal", secondary_y=True, range=[-1, 1])
 st.plotly_chart(fig3, width="stretch")
 
+fig4 = make_subplots(specs=[[{"secondary_y": True}]])
+fig4.add_trace(
+    go.Scatter(
+        x=df_plot["global_step"],
+        y=df_plot["eth_price"],
+        name="ETH Price",
+        line=dict(color="#1f77b4", width=2),
+    ),
+    secondary_y=False,
+)
+fig4.add_trace(
+    go.Scatter(
+        x=df_plot["global_step"],
+        y=df_plot["portfolio_usd"],
+        name="Portfolio Value",
+        line=dict(color="#2ca02c", width=2),
+    ),
+    secondary_y=False,
+)
+fig4.add_trace(
+    go.Scatter(
+        x=df_plot["global_step"],
+        y=df_plot["eth_allocation_pct"],
+        name="ETH Allocation %",
+        line=dict(color="#ff7f0e", width=2),
+    ),
+    secondary_y=True,
+)
+fig4.update_layout(
+    title="ETH Price, Portfolio Value & ETH Allocation",
+    showlegend=True,
+)
+fig4.update_xaxes(title_text="Global Step")
+fig4.update_yaxes(title_text="USD", secondary_y=False)
+fig4.update_yaxes(title_text="ETH Allocation (%)", secondary_y=True)
+st.plotly_chart(fig4, width="stretch")
+
 # ── Recent trades ──────────────────────────────────────────────────────────
 st.subheader("Recent Trades (Last 20 Buy/Sell Actions)")
 recent = (
