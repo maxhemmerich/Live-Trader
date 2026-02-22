@@ -153,9 +153,10 @@ fig1.update_layout(yaxis=dict(range=[df["portfolio_usd"].min(), df["portfolio_us
 st.plotly_chart(fig1, width="stretch")
 
 df_plot = df.copy()
+df_plot["global_step"] = range(len(df_plot))
 df_plot["action_smoothed"] = df_plot["action_raw"].rolling(window=20, min_periods=1).mean()
 
-fig2 = px.line(df_plot, x="step", y="action_smoothed", title="Action Signal Trend (Rolling Mean, Window=20)")
+fig2 = px.line(df_plot, x="global_step", y="action_smoothed", title="Action Signal Trend (Rolling Mean, Window=20)")
 fig2.update_layout(yaxis=dict(range=[-1, 1]))
 st.plotly_chart(fig2, width="stretch")
 
