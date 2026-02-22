@@ -148,19 +148,20 @@ col9.metric(
 st.markdown("---")
 
 # ── Line charts ────────────────────────────────────────────────────────────
-fig1 = px.line(df, x="timestamp", y="portfolio_usd", title="Portfolio Value Over Time")
+df_plot = df.copy()
+df_plot["global_step"] = range(len(df_plot))
+
+fig1 = px.line(df_plot, x="global_step", y="portfolio_usd", title="Portfolio Value Over Time")
 fig1.update_layout(yaxis=dict(range=[df["portfolio_usd"].min(), df["portfolio_usd"].max()]))
 st.plotly_chart(fig1, width="stretch")
 
-df_plot = df.copy()
-df_plot["global_step"] = range(len(df_plot))
 df_plot["action_smoothed"] = df_plot["action_raw"].rolling(window=20, min_periods=1).mean()
 
 fig2 = px.line(df_plot, x="global_step", y="action_smoothed", title="Action Signal Trend (Rolling Mean, Window=20)")
 fig2.update_layout(yaxis=dict(range=[-1, 1]))
 st.plotly_chart(fig2, width="stretch")
 
-fig3 = px.line(df, x="timestamp", y="eth_price", title="ETH/USD Price Over Time")
+fig3 = px.line(df_plot, x="global_step", y="eth_price", title="ETH/USD Price Over Time")
 fig3.update_layout(yaxis=dict(range=[df["eth_price"].min(), df["eth_price"].max()]))
 st.plotly_chart(fig3, width="stretch")
 
