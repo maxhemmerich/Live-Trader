@@ -103,25 +103,24 @@ if len(df) > 1:
 trade_count = int((df["action_taken"] != "hold").sum())
 trade_frequency = (trade_count / time_span_hours) if time_span_hours > 0 else 0.0
 
-portfolio_series = df["portfolio_usd"].reset_index(drop=True)
-if len(portfolio_series) > 1:
-    previous_portfolio_value = portfolio_series.iloc[-2]
-else:
-    previous_portfolio_value = portfolio_series.iloc[-1]
+if "global_step" not in df.columns:
+    df["global_step"] = range(len(df))
 
-if portfolio_value >= previous_portfolio_value:
-    trend_label = "Uptrend"
-    trend_sign = "+"
-    reversal_points = portfolio_series.iloc[:-1][portfolio_series.iloc[:-1] > portfolio_value]
-else:
-    trend_label = "Downtrend"
-    trend_sign = "-"
-    reversal_points = portfolio_series.iloc[:-1][portfolio_series.iloc[:-1] < portfolio_value]
+current_val = df["portfolio_usd"].iloc[-1]
+current_global_step = int(df["global_step"].iloc[-1])
+lower_steps = df[df["portfolio_usd"] < current_val]
 
-if reversal_points.empty:
-    trend_steps = len(portfolio_series)
+if lower_steps.empty:
+    trend_steps = 0
+    trend_metric_label = "Downtrend Duration"
+    trend_metric_value = f"all {current_global_step} steps"
+    trend_metric_delta = None
 else:
-    trend_steps = len(portfolio_series) - (int(reversal_points.index.max()) + 1)
+    earliest_lower = int(lower_steps["global_step"].min())
+    trend_steps = current_global_step - earliest_lower
+    trend_metric_label = "Above Low Duration"
+    trend_metric_value = f"{trend_steps} steps"
+    trend_metric_delta = f"Above low for: {trend_steps} steps"
 
 today = pd.Timestamp.now().date()
 today_rows = df[df["timestamp"].dt.date == today]
@@ -192,9 +191,9 @@ col11.metric(
     value = f"{usd_allocation_pct:.2f}%",
 )
 col12.metric(
-    label = trend_label,
-    value = f"{trend_steps} steps",
-    delta = f"{trend_sign}{trend_steps} steps",
+    label = trend_metric_label,
+    value = trend_metric_value,
+    delta = trend_metric_delta,
 )
 col13.metric(
     label = "PnL Today",
@@ -205,7 +204,8 @@ st.markdown("---")
 
 # ── Line charts ────────────────────────────────────────────────────────────
 df_plot = df.copy()
-df_plot["global_step"] = range(len(df_plot))
+if "global_step" not in df_plot.columns:
+    df_plot["global_step"] = range(len(df_plot))
 df_plot["eth_allocation_pct"] = (
     (df_plot["eth_balance"] * df_plot["eth_price"]) / df_plot["portfolio_usd"].replace(0, pd.NA)
 ) * 100.0
