@@ -563,7 +563,7 @@ class KrakenLiveEnv(gym.Env):
                         status,
                     )
                     self.pending_order_id = None
-                    return False, 0.0, False
+                    return True, self._extract_fill_price(latest_order, quoted_price), False
                 if status == "open" and hasattr(self.exchange, "cancel_order"):
                     try:
                         self.exchange.cancel_order(self.pending_order_id, self.symbol)

@@ -83,6 +83,15 @@ pnl_pct              = (total_pnl / initial_portfolio) * 100.0 if initial_portfo
 current_action   = latest["action_taken"]
 current_price    = latest["eth_price"]
 total_steps      = len(df)
+eth_balance      = latest["eth_balance"]
+usd_balance      = latest["usd_balance"]
+
+if portfolio_value > 0:
+    eth_allocation_pct = ((eth_balance * current_price) / portfolio_value) * 100.0
+    usd_allocation_pct = (usd_balance / portfolio_value) * 100.0
+else:
+    eth_allocation_pct = 0.0
+    usd_allocation_pct = 0.0
 
 time_span_hours = 0.0
 if len(df) > 1:
@@ -126,7 +135,7 @@ col5.metric(
 
 st.markdown("<div style='height: 0.75rem;'></div>", unsafe_allow_html=True)
 
-col6, col7, col8, col9 = st.columns(4)
+col6, col7, col8, col9, col10, col11 = st.columns(6)
 
 col6.metric(
     label = "Trade Frequency",
@@ -143,6 +152,14 @@ col8.metric(
 col9.metric(
     label = "Hold",
     value = f"{action_counts['hold']:,} ({action_percentages['hold']:.0f}%)",
+)
+col10.metric(
+    label = "ETH Allocation",
+    value = f"{eth_allocation_pct:.2f}%",
+)
+col11.metric(
+    label = "USD Allocation",
+    value = f"{usd_allocation_pct:.2f}%",
 )
 
 st.markdown("---")
