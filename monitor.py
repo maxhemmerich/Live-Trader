@@ -7,16 +7,18 @@ Usage:
 Features:
     - Auto-refreshes every 10 seconds (configurable via sidebar)
     - Loads and displays trading_log.csv produced by train.py
-    - KPI metrics: portfolio value, total PnL, latest action, last ETH price
-    - Line charts: portfolio value, action signal, ETH price over time
-    - Recent trades table (last 20 rows)
+    - KPI metrics: portfolio value, total PnL, trend duration, today's PnL, latest action, last ETH price
+    - Line charts: portfolio value and ETH overlays for allocation + action signal
+    - Recent trades table (last 20 buy/sell actions)
     - Summary statistics for reward and action signal
 """
 
 import os
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 from streamlit_autorefresh import st_autorefresh
 
 # ── Page configuration (must be first Streamlit call) ─────────────────────
@@ -101,6 +103,34 @@ if len(df) > 1:
 trade_count = int((df["action_taken"] != "hold").sum())
 trade_frequency = (trade_count / time_span_hours) if time_span_hours > 0 else 0.0
 
+portfolio_series = df["portfolio_usd"].reset_index(drop=True)
+if len(portfolio_series) > 1:
+    previous_portfolio_value = portfolio_series.iloc[-2]
+else:
+    previous_portfolio_value = portfolio_series.iloc[-1]
+
+if portfolio_value >= previous_portfolio_value:
+    trend_label = "Uptrend"
+    trend_sign = "+"
+    reversal_points = portfolio_series.iloc[:-1][portfolio_series.iloc[:-1] > portfolio_value]
+else:
+    trend_label = "Downtrend"
+    trend_sign = "-"
+    reversal_points = portfolio_series.iloc[:-1][portfolio_series.iloc[:-1] < portfolio_value]
+
+if reversal_points.empty:
+    trend_steps = len(portfolio_series)
+else:
+    trend_steps = len(portfolio_series) - (int(reversal_points.index.max()) + 1)
+
+today = pd.Timestamp.now().date()
+today_rows = df[df["timestamp"].dt.date == today]
+if today_rows.empty:
+    pnl_today = 0.0
+else:
+    first_today_portfolio = float(today_rows.iloc[0]["portfolio_usd"])
+    pnl_today = portfolio_value - first_today_portfolio
+
 action_counts = (
     df["action_taken"]
     .value_counts()
@@ -135,7 +165,7 @@ col5.metric(
 
 st.markdown("<div style='height: 0.75rem;'></div>", unsafe_allow_html=True)
 
-col6, col7, col8, col9, col10, col11 = st.columns(6)
+col6, col7, col8, col9, col10, col11, col12, col13 = st.columns(8)
 
 col6.metric(
     label = "Trade Frequency",
@@ -161,31 +191,95 @@ col11.metric(
     label = "USD Allocation",
     value = f"{usd_allocation_pct:.2f}%",
 )
+col12.metric(
+    label = trend_label,
+    value = f"{trend_steps} steps",
+    delta = f"{trend_sign}{trend_steps} steps",
+)
+col13.metric(
+    label = "PnL Today",
+    value = f"${pnl_today:+,.2f}",
+)
 
 st.markdown("---")
 
 # ── Line charts ────────────────────────────────────────────────────────────
 df_plot = df.copy()
 df_plot["global_step"] = range(len(df_plot))
+df_plot["eth_allocation_pct"] = (
+    (df_plot["eth_balance"] * df_plot["eth_price"]) / df_plot["portfolio_usd"].replace(0, pd.NA)
+) * 100.0
+df_plot["eth_allocation_pct"] = df_plot["eth_allocation_pct"].fillna(0.0)
+df_plot["action_smoothed"] = df_plot["action_raw"].rolling(window=20, min_periods=1).mean()
 
 fig1 = px.line(df_plot, x="global_step", y="portfolio_usd", title="Portfolio Value Over Time")
 fig1.update_layout(yaxis=dict(range=[df["portfolio_usd"].min(), df["portfolio_usd"].max()]))
 st.plotly_chart(fig1, width="stretch")
 
-df_plot["action_smoothed"] = df_plot["action_raw"].rolling(window=20, min_periods=1).mean()
-
-fig2 = px.line(df_plot, x="global_step", y="action_smoothed", title="Action Signal Trend (Rolling Mean, Window=20)")
-fig2.update_layout(yaxis=dict(range=[-1, 1]))
+fig2 = make_subplots(specs=[[{"secondary_y": True}]])
+fig2.add_trace(
+    go.Scatter(
+        x=df_plot["global_step"],
+        y=df_plot["eth_price"],
+        name="ETH/USD",
+        line=dict(color="#1f77b4", width=2),
+    ),
+    secondary_y=False,
+)
+fig2.add_trace(
+    go.Scatter(
+        x=df_plot["global_step"],
+        y=df_plot["eth_allocation_pct"],
+        name="ETH Allocation %",
+        line=dict(color="#ff7f0e", width=2),
+    ),
+    secondary_y=True,
+)
+fig2.update_layout(title="ETH Price vs Portfolio ETH Allocation")
+fig2.update_xaxes(title_text="Global Step")
+fig2.update_yaxes(title_text="ETH/USD Price", secondary_y=False)
+fig2.update_yaxes(title_text="ETH Allocation (%)", secondary_y=True)
 st.plotly_chart(fig2, width="stretch")
 
-fig3 = px.line(df_plot, x="global_step", y="eth_price", title="ETH/USD Price Over Time")
-fig3.update_layout(yaxis=dict(range=[df["eth_price"].min(), df["eth_price"].max()]))
+fig3 = make_subplots(specs=[[{"secondary_y": True}]])
+fig3.add_trace(
+    go.Scatter(
+        x=df_plot["global_step"],
+        y=df_plot["eth_price"],
+        name="ETH/USD",
+        line=dict(color="#1f77b4", width=2),
+    ),
+    secondary_y=False,
+)
+fig3.add_trace(
+    go.Scatter(
+        x=df_plot["global_step"],
+        y=df_plot["action_raw"],
+        name="Action Raw",
+        line=dict(color="#d62728", width=1),
+        opacity=0.35,
+    ),
+    secondary_y=True,
+)
+fig3.add_trace(
+    go.Scatter(
+        x=df_plot["global_step"],
+        y=df_plot["action_smoothed"],
+        name="Action Raw (Rolling Mean, 20)",
+        line=dict(color="#d62728", width=3),
+    ),
+    secondary_y=True,
+)
+fig3.update_layout(title="ETH Price vs Action Signal")
+fig3.update_xaxes(title_text="Global Step")
+fig3.update_yaxes(title_text="ETH/USD Price", secondary_y=False)
+fig3.update_yaxes(title_text="Action Signal", secondary_y=True, range=[-1, 1])
 st.plotly_chart(fig3, width="stretch")
 
 # ── Recent trades ──────────────────────────────────────────────────────────
-st.subheader("Recent Trades (Last 20 Steps)")
+st.subheader("Recent Trades (Last 20 Buy/Sell Actions)")
 recent = (
-    df[["timestamp", "step", "eth_price", "action_raw", "action_taken", "portfolio_usd", "reward"]]
+    df[df["action_taken"].isin(["buy", "sell"])][["timestamp", "step", "eth_price", "action_raw", "action_taken", "portfolio_usd", "reward"]]
     .tail(20)
     .sort_values("step", ascending=False)
     .copy()
