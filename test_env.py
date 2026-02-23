@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 import env as env_module
-from env import KrakenLiveEnv
+from env import OBSERVATION_SIZE, KrakenLiveEnv
 
 
 def main() -> None:
@@ -62,7 +62,7 @@ def main() -> None:
     print(f"Reset observation shape: {obs.shape}")
     print(f"Reset info: {info}")
 
-    assert obs.shape == (227,)
+    assert obs.shape == (OBSERVATION_SIZE,)
     assert obs.shape == env.observation_space.shape
     assert not np.isnan(obs).any()
     assert not np.isinf(obs).any()
@@ -83,7 +83,7 @@ def main() -> None:
             f"action_taken={action_taken}"
         )
 
-        assert obs.shape == (227,)
+        assert obs.shape == (OBSERVATION_SIZE,)
         assert obs.shape == env.observation_space.shape
         assert not has_nan, f"NaN detected in observation at step {step_num}"
         assert not has_inf, f"Inf detected in observation at step {step_num}"
