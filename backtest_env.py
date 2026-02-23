@@ -6,7 +6,6 @@ import time
 from collections import deque
 from typing import Optional
 
-import ccxt
 import gymnasium as gym
 import numpy as np
 import pandas as pd
@@ -50,7 +49,6 @@ class KrakenBacktestEnv(gym.Env):
         self.initial_eth = float(initial_eth)
         self.max_buffer_rows = int(max_buffer_rows)
         self.trade_size_eth = 0.001
-        self.exchange = ccxt.kraken({"enableRateLimit": True})
         self.btc_prices: deque[float] = deque(maxlen=25)
 
         print(f"[KrakenBacktestEnv] Starting init for CSV: {self.csv_path}")
@@ -221,17 +219,19 @@ class KrakenBacktestEnv(gym.Env):
 
     def _get_btc_features(self) -> list[float]:
         try:
-            ticker = self.exchange.fetch_ticker("BTC/USD")
-            btc_price = float(ticker.get("last") or 0.0)
+            btc_price = float(self.full_df.iloc[self.current_idx]["close"])
             if btc_price <= 0.0:
                 return [0.0, 0.0, 0.0]
             self.btc_prices.append(btc_price)
 
-            btc_series = pd.Series(list(self.btc_prices), dtype=float)
-            btc_ema20 = float(btc_series.ewm(span=20, adjust=False).mean().iloc[-1])
+            alpha = 2.0 / (20.0 + 1.0)
+            btc_ema20 = float(self.btc_prices[0])
+            for price in list(self.btc_prices)[1:]:
+                btc_ema20 = (alpha * float(price)) + ((1.0 - alpha) * btc_ema20)
+
             btc_return_1 = 0.0
             if len(self.btc_prices) >= 2:
-                prev_btc = float(btc_series.iloc[-2])
+                prev_btc = float(self.btc_prices[-2])
                 btc_return_1 = (btc_price - prev_btc) / (prev_btc + 1e-8)
 
             eth_return_1 = 0.0

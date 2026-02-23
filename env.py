@@ -99,9 +99,9 @@ SELF_AWARE_COLUMNS = [
 ]
 TIME_COLUMNS = ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "dom_sin", "dom_cos"]
 BTC_FEATURE_COLUMNS = [
-    "btc_price_over_ema20_minus_1",
+    "btc_ema20_dev",
     "btc_return_1",
-    "btc_minus_eth_return_1",
+    "btc_eth_return_diff",
 ]
 
 FEATURE_COLUMNS = (
@@ -366,11 +366,14 @@ class KrakenLiveEnv(gym.Env):
                 return [0.0, 0.0, 0.0]
             self.btc_prices.append(btc_price)
 
-            btc_series = pd.Series(list(self.btc_prices), dtype=float)
-            btc_ema20 = float(btc_series.ewm(span=20, adjust=False).mean().iloc[-1])
+            alpha = 2.0 / (20.0 + 1.0)
+            btc_ema20 = float(self.btc_prices[0])
+            for price in list(self.btc_prices)[1:]:
+                btc_ema20 = (alpha * float(price)) + ((1.0 - alpha) * btc_ema20)
+
             btc_return_1 = 0.0
             if len(self.btc_prices) >= 2:
-                prev_btc = float(btc_series.iloc[-2])
+                prev_btc = float(self.btc_prices[-2])
                 btc_return_1 = (btc_price - prev_btc) / (prev_btc + 1e-8)
 
             eth_return_1 = 0.0
