@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import glob
 import logging
+from collections import deque
 import os
 import re
 import sys
@@ -97,6 +98,11 @@ SELF_AWARE_COLUMNS = [
     "current_position_return",
 ]
 TIME_COLUMNS = ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "dom_sin", "dom_cos"]
+BTC_FEATURE_COLUMNS = [
+    "btc_price_over_ema20_minus_1",
+    "btc_return_1",
+    "btc_minus_eth_return_1",
+]
 
 FEATURE_COLUMNS = (
     PRICE_LAG_COLUMNS
@@ -107,6 +113,7 @@ FEATURE_COLUMNS = (
     + PORTFOLIO_COLUMNS
     + SELF_AWARE_COLUMNS
     + TIME_COLUMNS
+    + BTC_FEATURE_COLUMNS
 )
 OBSERVATION_COLUMNS = FEATURE_COLUMNS
 OBSERVATION_SIZE = len(FEATURE_COLUMNS)
@@ -169,6 +176,8 @@ class KrakenLiveEnv(gym.Env):
         self.position_entry_price: Optional[float] = None
         self.position_entry_step: Optional[int] = None
         self.pending_order_id: Optional[str] = None
+
+        self.btc_prices: deque[float] = deque(maxlen=25)
 
         self.df = self._initialize_candle_buffer()
         self.distant_anchors = self._init_distant_anchors()
@@ -349,6 +358,35 @@ class KrakenLiveEnv(gym.Env):
             return float(np.tanh(value * 5.0))
         return value
 
+    def _get_btc_features(self) -> list[float]:
+        try:
+            ticker = self.exchange.fetch_ticker("BTC/USD")
+            btc_price = float(ticker.get("last") or 0.0)
+            if btc_price <= 0.0:
+                return [0.0, 0.0, 0.0]
+            self.btc_prices.append(btc_price)
+
+            btc_series = pd.Series(list(self.btc_prices), dtype=float)
+            btc_ema20 = float(btc_series.ewm(span=20, adjust=False).mean().iloc[-1])
+            btc_return_1 = 0.0
+            if len(self.btc_prices) >= 2:
+                prev_btc = float(btc_series.iloc[-2])
+                btc_return_1 = (btc_price - prev_btc) / (prev_btc + 1e-8)
+
+            eth_return_1 = 0.0
+            if len(self.df) >= 2:
+                prev_eth = float(self.df["close"].iloc[-2])
+                curr_eth = float(self.df["close"].iloc[-1])
+                eth_return_1 = (curr_eth - prev_eth) / (prev_eth + 1e-8)
+
+            return [
+                (btc_price / (btc_ema20 + 1e-8)) - 1.0,
+                btc_return_1,
+                btc_return_1 - eth_return_1,
+            ]
+        except Exception:
+            return [0.0, 0.0, 0.0]
+
     def _compute_observation(self, usd_balance: float, eth_balance: float) -> np.ndarray:
         df = self.df.copy()
         if df.empty:
@@ -478,6 +516,8 @@ class KrakenLiveEnv(gym.Env):
             np.cos(2 * np.pi * dom / 31.0),
         ]
 
+        btc_features = self._get_btc_features()
+
         obs = np.array(
             price_lags
             + vol_lags
@@ -486,7 +526,8 @@ class KrakenLiveEnv(gym.Env):
             + order_book_features
             + portfolio_features
             + self_awareness
-            + time_features,
+            + time_features
+            + btc_features,
             dtype=np.float32,
         )
         obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
@@ -654,6 +695,7 @@ class KrakenLiveEnv(gym.Env):
         self.position_entry_price = None
         self.position_entry_step = None
         self.pending_order_id = None
+        self.btc_prices.clear()
         self.kill_switch = False
         self.consecutive_errors = 0
 

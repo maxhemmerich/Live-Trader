@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from typing import Optional
 
+import ccxt
 import gymnasium as gym
 import numpy as np
 import pandas as pd
@@ -48,6 +50,8 @@ class KrakenBacktestEnv(gym.Env):
         self.initial_eth = float(initial_eth)
         self.max_buffer_rows = int(max_buffer_rows)
         self.trade_size_eth = 0.001
+        self.exchange = ccxt.kraken({"enableRateLimit": True})
+        self.btc_prices: deque[float] = deque(maxlen=25)
 
         print(f"[KrakenBacktestEnv] Starting init for CSV: {self.csv_path}")
         load_start_time = time.perf_counter()
@@ -215,6 +219,35 @@ class KrakenBacktestEnv(gym.Env):
         self.df["bb50_width_price"] = (bb50.bollinger_hband() - bb50.bollinger_lband()) / (close + 1e-8)
         self.df["obv_pct_change"] = obv.pct_change()
 
+    def _get_btc_features(self) -> list[float]:
+        try:
+            ticker = self.exchange.fetch_ticker("BTC/USD")
+            btc_price = float(ticker.get("last") or 0.0)
+            if btc_price <= 0.0:
+                return [0.0, 0.0, 0.0]
+            self.btc_prices.append(btc_price)
+
+            btc_series = pd.Series(list(self.btc_prices), dtype=float)
+            btc_ema20 = float(btc_series.ewm(span=20, adjust=False).mean().iloc[-1])
+            btc_return_1 = 0.0
+            if len(self.btc_prices) >= 2:
+                prev_btc = float(btc_series.iloc[-2])
+                btc_return_1 = (btc_price - prev_btc) / (prev_btc + 1e-8)
+
+            eth_return_1 = 0.0
+            if self.current_pos >= 1:
+                prev_eth = float(self.df.iloc[self.current_pos - 1]["close"])
+                curr_eth = float(self.df.iloc[self.current_pos]["close"])
+                eth_return_1 = (curr_eth - prev_eth) / (prev_eth + 1e-8)
+
+            return [
+                (btc_price / (btc_ema20 + 1e-8)) - 1.0,
+                btc_return_1,
+                btc_return_1 - eth_return_1,
+            ]
+        except Exception:
+            return [0.0, 0.0, 0.0]
+
     def _compute_observation(self, usd_balance: float, eth_balance: float) -> np.ndarray:
         if self.df.empty:
             return np.zeros((OBSERVATION_SIZE,), dtype=np.float32)
@@ -278,6 +311,8 @@ class KrakenBacktestEnv(gym.Env):
             np.cos(2 * np.pi * dom / 31.0),
         ]
 
+        btc_features = self._get_btc_features()
+
         obs = np.array(
             price_lags
             + vol_lags
@@ -286,7 +321,8 @@ class KrakenBacktestEnv(gym.Env):
             + order_book_features
             + portfolio_features
             + self_awareness
-            + time_features,
+            + time_features
+            + btc_features,
             dtype=np.float32,
         )
         obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
@@ -322,6 +358,7 @@ class KrakenBacktestEnv(gym.Env):
         self.last_filled_trade_step = 0
         self.position_entry_price = None
         self.position_entry_step = None
+        self.btc_prices.clear()
 
         current_price = float(self.df.iloc[self.current_pos]["close"])
         self.starting_portfolio_usd = self._get_portfolio_value(self.eth_balance, self.usd_balance, current_price)
