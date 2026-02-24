@@ -140,7 +140,7 @@ class KrakenLiveEnv(gym.Env):
         self.max_buffer_rows = max_buffer_rows
         self.checkpoint_dir = checkpoint_dir
         self.trading_log_path = trading_log_path
-        self.trade_size_eth = 0.001
+        self.min_order_eth = 0.001
 
         self.logger = logging.getLogger(self.__class__.__name__)
         if not self.logger.handlers:
@@ -577,13 +577,13 @@ class KrakenLiveEnv(gym.Env):
             return float(fallback_price)
         return float(fill_price)
 
-    def _execute_limit_order(self, side: str, quoted_price: float) -> tuple[bool, float, bool]:
+    def _execute_limit_order(self, side: str, quoted_price: float, amount_eth: float) -> tuple[bool, float, bool]:
         """Return (filled, fill_price, canceled)."""
         try:
             if side == "buy":
-                order = self.exchange.create_limit_buy_order(self.symbol, self.trade_size_eth, quoted_price)
+                order = self.exchange.create_limit_buy_order(self.symbol, amount_eth, quoted_price)
             else:
-                order = self.exchange.create_limit_sell_order(self.symbol, self.trade_size_eth, quoted_price)
+                order = self.exchange.create_limit_sell_order(self.symbol, amount_eth, quoted_price)
 
             order_id = order.get("id")
             self.pending_order_id = order_id
@@ -743,30 +743,47 @@ class KrakenLiveEnv(gym.Env):
             bids, asks = [], []
 
         if not self.kill_switch and bids and asks:
-            if action_raw > 0.85:
-                quote_price = float(bids[0][0])
-                required = self.trade_size_eth * quote_price * (1.0 + MAKER_FEE)
-                if usd_balance >= required:
-                    trade_filled, filled_price, canceled = self._execute_limit_order("buy", quote_price)
-                    if trade_filled:
-                        self.last_action = "buy"
-                        self.position_entry_price = filled_price
-                        self.position_entry_step = self.step_count + 1
-                        self.last_filled_trade_step = self.step_count + 1
-                    elif canceled:
-                        forced_hold_reward = True
+            if action_raw > 0.5:
+                target_eth_alloc = 1.0
+            elif action_raw < -0.5:
+                target_eth_alloc = 0.0
+            else:
+                target_eth_alloc = 0.5
+
+            eth_value = eth_balance * current_price
+            portfolio_usd_before = eth_value + usd_balance
+            alloc_diff_threshold = 0.10 * portfolio_usd_before
+            target_eth_value = portfolio_usd_before * target_eth_alloc
+            eth_value_gap = target_eth_value - eth_value
+
+            if portfolio_usd_before > 0 and abs(eth_value_gap) > alloc_diff_threshold:
+                if eth_value_gap > 0:
+                    quote_price = float(bids[0][0])
+                    order_eth = eth_value_gap / max(quote_price, 1e-8)
+                    max_affordable_eth = usd_balance / max(quote_price * (1.0 + MAKER_FEE), 1e-8)
+                    order_eth = min(order_eth, max_affordable_eth)
+                    if order_eth >= self.min_order_eth:
+                        trade_filled, filled_price, canceled = self._execute_limit_order("buy", quote_price, order_eth)
+                        if trade_filled:
+                            self.last_action = "buy"
+                            self.position_entry_price = filled_price
+                            self.position_entry_step = self.step_count + 1
+                            self.last_filled_trade_step = self.step_count + 1
+                        elif canceled:
+                            forced_hold_reward = True
                 else:
-                    self.last_action = "hold"
-            elif action_raw < -0.85 and eth_balance >= self.trade_size_eth:
-                quote_price = float(asks[0][0])
-                trade_filled, filled_price, canceled = self._execute_limit_order("sell", quote_price)
-                if trade_filled:
-                    self.last_action = "sell"
-                    self.position_entry_price = None
-                    self.position_entry_step = None
-                    self.last_filled_trade_step = self.step_count + 1
-                elif canceled:
-                    forced_hold_reward = True
+                    quote_price = float(asks[0][0])
+                    desired_sell_eth = abs(eth_value_gap) / max(quote_price, 1e-8)
+                    order_eth = min(desired_sell_eth, eth_balance)
+                    if order_eth >= self.min_order_eth:
+                        trade_filled, filled_price, canceled = self._execute_limit_order("sell", quote_price, order_eth)
+                        if trade_filled:
+                            self.last_action = "sell"
+                            self.position_entry_price = None
+                            self.position_entry_step = None
+                            self.last_filled_trade_step = self.step_count + 1
+                        elif canceled:
+                            forced_hold_reward = True
 
         balance_after = self._safe_fetch_balance()
         if balance_after is None:
@@ -818,4 +835,5 @@ class KrakenLiveEnv(gym.Env):
             "portfolio_usd": portfolio_usd,
             "kill_switch": self.kill_switch,
             "fill_price": filled_price if trade_filled else None,
+            "eth_allocation": (eth_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0,
         }
