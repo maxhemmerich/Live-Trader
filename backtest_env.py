@@ -48,7 +48,7 @@ class KrakenBacktestEnv(gym.Env):
         self.initial_usd = float(initial_usd)
         self.initial_eth = float(initial_eth)
         self.max_buffer_rows = int(max_buffer_rows)
-        self.trade_size_eth = 0.001
+        self.min_order_eth = 0.001
         self.btc_prices: deque[float] = deque(maxlen=25)
 
         print(f"[KrakenBacktestEnv] Starting init for CSV: {self.csv_path}")
@@ -384,27 +384,46 @@ class KrakenBacktestEnv(gym.Env):
         trade_filled = False
         filled_price = None
 
-        if action_raw > 0.85:
-            required = self.trade_size_eth * execution_price * (1.0 + MAKER_FEE)
-            if self.usd_balance >= required:
-                self.usd_balance -= required
-                self.eth_balance += self.trade_size_eth
-                trade_filled = True
-                filled_price = execution_price
-                self.last_action = "buy"
-                self.position_entry_price = execution_price
-                self.position_entry_step = self.step_count + 1
-                self.last_filled_trade_step = self.step_count + 1
-        elif action_raw < -0.85 and self.eth_balance >= self.trade_size_eth:
-            proceeds = self.trade_size_eth * execution_price * (1.0 - MAKER_FEE)
-            self.eth_balance -= self.trade_size_eth
-            self.usd_balance += proceeds
-            trade_filled = True
-            filled_price = execution_price
-            self.last_action = "sell"
-            self.position_entry_price = None
-            self.position_entry_step = None
-            self.last_filled_trade_step = self.step_count + 1
+        if action_raw > 0.5:
+            target_eth_alloc = 1.0
+        elif action_raw < -0.5:
+            target_eth_alloc = 0.0
+        else:
+            target_eth_alloc = 0.5
+
+        eth_value = self.eth_balance * execution_price
+        portfolio_before = eth_value + self.usd_balance
+        target_eth_value = portfolio_before * target_eth_alloc
+        eth_value_gap = target_eth_value - eth_value
+        alloc_diff_threshold = 0.10 * portfolio_before
+
+        if portfolio_before > 0 and abs(eth_value_gap) > alloc_diff_threshold:
+            if eth_value_gap > 0:
+                buy_eth = eth_value_gap / max(execution_price, 1e-8)
+                max_affordable_eth = self.usd_balance / max(execution_price * (1.0 + MAKER_FEE), 1e-8)
+                buy_eth = min(buy_eth, max_affordable_eth)
+                if buy_eth >= self.min_order_eth:
+                    required = buy_eth * execution_price * (1.0 + MAKER_FEE)
+                    self.usd_balance -= required
+                    self.eth_balance += buy_eth
+                    trade_filled = True
+                    filled_price = execution_price
+                    self.last_action = "buy"
+                    self.position_entry_price = execution_price
+                    self.position_entry_step = self.step_count + 1
+                    self.last_filled_trade_step = self.step_count + 1
+            else:
+                sell_eth = min(abs(eth_value_gap) / max(execution_price, 1e-8), self.eth_balance)
+                if sell_eth >= self.min_order_eth:
+                    proceeds = sell_eth * execution_price * (1.0 - MAKER_FEE)
+                    self.eth_balance -= sell_eth
+                    self.usd_balance += proceeds
+                    trade_filled = True
+                    filled_price = execution_price
+                    self.last_action = "sell"
+                    self.position_entry_price = None
+                    self.position_entry_step = None
+                    self.last_filled_trade_step = self.step_count + 1
 
         current_price = float(next_bar["close"])
         obs = self._compute_observation(self.usd_balance, self.eth_balance)
@@ -438,6 +457,7 @@ class KrakenBacktestEnv(gym.Env):
             "action_taken": self.last_action,
             "portfolio_usd": portfolio_usd,
             "fill_price": filled_price,
+            "eth_allocation": (self.eth_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0,
         }
         return obs, float(scaled_reward), terminated, False, info
 
