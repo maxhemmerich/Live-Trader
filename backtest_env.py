@@ -84,12 +84,51 @@ class KrakenBacktestEnv(gym.Env):
 
         btc_csv_path = "D:/BTCUSD_1.csv"
         if os.path.exists(btc_csv_path):
-            self.btc_df = pd.read_csv(
-                btc_csv_path,
-                header=None,
-                names=["ts", "open", "high", "low", "close", "vol", "trades"],
-                dtype={"ts": np.int64, "open": np.float32, "high": np.float32, "low": np.float32, "close": np.float32, "vol": np.float32, "trades": np.int32},
-                usecols=["ts", "open", "high", "low", "close", "vol"],
+            self.btc_df = pd.read_csv(btc_csv_path, header=0)
+            original_btc_columns = list(self.btc_df.columns)
+            print(f"[KrakenBacktestEnv] BTC CSV original columns: {original_btc_columns}")
+
+            normalized_map = {}
+            for column in original_btc_columns:
+                col_norm = str(column).strip().lower()
+                if col_norm in {"ts", "timestamp", "time", "datetime", "date"}:
+                    normalized_map[column] = "ts"
+                elif col_norm in {"open", "o"}:
+                    normalized_map[column] = "open"
+                elif col_norm in {"high", "h"}:
+                    normalized_map[column] = "high"
+                elif col_norm in {"low", "l"}:
+                    normalized_map[column] = "low"
+                elif col_norm in {"close", "c", "last"}:
+                    normalized_map[column] = "close"
+                elif col_norm in {"vol", "volume", "v"}:
+                    normalized_map[column] = "vol"
+
+            self.btc_df = self.btc_df.rename(columns=normalized_map)
+
+            expected_cols = ["ts", "open", "high", "low", "close", "vol"]
+            missing = [col for col in expected_cols if col not in self.btc_df.columns]
+            if missing:
+                fallback_cols = list(self.btc_df.columns[:6])
+                if len(fallback_cols) == 6:
+                    self.btc_df = self.btc_df[fallback_cols].copy()
+                    self.btc_df.columns = expected_cols
+                else:
+                    raise ValueError(
+                        f"BTC CSV missing expected columns {missing} and does not have at least 6 columns for fallback mapping."
+                    )
+            else:
+                self.btc_df = self.btc_df[expected_cols].copy()
+
+            self.btc_df = self.btc_df.astype(
+                {
+                    "ts": np.int64,
+                    "open": np.float32,
+                    "high": np.float32,
+                    "low": np.float32,
+                    "close": np.float32,
+                    "vol": np.float32,
+                }
             )
             self.btc_df["ts"] = self.btc_df["ts"] * 1000
             self.btc_available = len(self.btc_df) > 0
