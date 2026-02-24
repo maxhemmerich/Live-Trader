@@ -4,11 +4,59 @@ import numpy as np
 import pandas as pd
 
 import env as env_module
-from env import OBSERVATION_SIZE, KrakenLiveEnv
+from env import (
+    BTC_FEATURE_COLUMNS,
+    LAG_VALUES,
+    LR_CHANNEL_COLUMNS,
+    OBSERVATION_SIZE,
+    SCALAR_COLUMNS,
+    TREND_LAG_COLUMNS,
+    TREND_PREFIXES,
+    KrakenLiveEnv,
+)
+
+
+def _print_observation_size_delta() -> None:
+    old_trend_lags = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 65536, 131072, 262144, 524288, 1048576]
+    old_counts = {
+        "price_lags": len(LAG_VALUES),
+        "vol_lags": len(LAG_VALUES),
+        "scalar": len(SCALAR_COLUMNS),
+        "trend_lags": len(TREND_PREFIXES) * len(old_trend_lags),
+        "lr_channels": 0,
+        "order_book": 5,
+        "portfolio": 2,
+        "self_awareness": 3,
+        "time": 6,
+        "btc": 3,
+    }
+    new_counts = {
+        "price_lags": len(LAG_VALUES),
+        "vol_lags": len(LAG_VALUES),
+        "scalar": len(SCALAR_COLUMNS),
+        "trend_lags": len(TREND_LAG_COLUMNS),
+        "lr_channels": len(LR_CHANNEL_COLUMNS),
+        "order_book": 5,
+        "portfolio": 2,
+        "self_awareness": 3,
+        "time": 6,
+        "btc": len(BTC_FEATURE_COLUMNS),
+    }
+    old_size = sum(old_counts.values())
+    new_size = sum(new_counts.values())
+    print(f"old observation size: {old_size}")
+    print(f"new observation size: {new_size}")
+    print("feature breakdown delta (new - old):")
+    for key in old_counts:
+        delta = new_counts[key] - old_counts[key]
+        print(f"  {key}: {new_counts[key]} (delta {delta:+d})")
+
 
 
 def main() -> None:
     env_module.time.sleep = lambda *_args, **_kwargs: None
+
+    _print_observation_size_delta()
 
     env = KrakenLiveEnv()
 
