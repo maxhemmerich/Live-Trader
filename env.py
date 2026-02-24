@@ -83,7 +83,10 @@ TREND_PREFIXES = [
     "bb50_width_price",
     "obv_pct_change",
 ]
-TREND_LAG_COLUMNS = [f"{prefix}_lag_{n}" for prefix in TREND_PREFIXES for n in LAG_VALUES]
+TREND_LAG_VALUES = [1, 4, 16, 64, 256]
+TREND_LAG_COLUMNS = [f"{prefix}_lag_{n}" for prefix in TREND_PREFIXES for n in TREND_LAG_VALUES]
+LR_WINDOWS = [60, 1440, 10080, 40000]
+LR_CHANNEL_COLUMNS = [f"lr{n}_{suffix}" for n in LR_WINDOWS for suffix in ("mid", "upper", "lower")]
 ORDER_BOOK_COLUMNS = [
     "bid_ask_spread_frac",
     "bid_depth_5_over_vol20",
@@ -99,9 +102,16 @@ SELF_AWARE_COLUMNS = [
 ]
 TIME_COLUMNS = ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "dom_sin", "dom_cos"]
 BTC_FEATURE_COLUMNS = [
-    "btc_ema20_dev",
     "btc_return_1",
-    "btc_eth_return_diff",
+    "btc_return_4",
+    "btc_return_16",
+    "btc_ema20_dev",
+    "btc_rsi14_norm",
+    "btc_eth_return_diff_1",
+    "btc_eth_return_diff_4",
+    "btc_eth_return_diff_16",
+    "btc_lr60_mid",
+    "btc_lr60_upper",
 ]
 
 FEATURE_COLUMNS = (
@@ -109,6 +119,7 @@ FEATURE_COLUMNS = (
     + VOL_LAG_COLUMNS
     + SCALAR_COLUMNS
     + TREND_LAG_COLUMNS
+    + LR_CHANNEL_COLUMNS
     + ORDER_BOOK_COLUMNS
     + PORTFOLIO_COLUMNS
     + SELF_AWARE_COLUMNS
@@ -177,7 +188,9 @@ class KrakenLiveEnv(gym.Env):
         self.position_entry_step: Optional[int] = None
         self.pending_order_id: Optional[str] = None
 
-        self.btc_prices: deque[float] = deque(maxlen=25)
+        self.btc_prices: deque[float] = deque(maxlen=20)
+        self.btc_prices_rsi: deque[float] = deque(maxlen=30)
+        self.btc_prices_lr: deque[float] = deque(maxlen=60)
 
         self.df = self._initialize_candle_buffer()
         self.distant_anchors = self._init_distant_anchors()
@@ -358,37 +371,95 @@ class KrakenLiveEnv(gym.Env):
             return float(np.tanh(value * 5.0))
         return value
 
+    def _compute_lr_channel_features(self, prices: pd.Series, current_price: float) -> list[float]:
+        features: list[float] = []
+        for window in LR_WINDOWS:
+            if len(prices) < window:
+                features.extend([0.0, 0.0, 0.0])
+                continue
+            y = prices.iloc[-window:].to_numpy(dtype=np.float64)
+            x = np.arange(window, dtype=np.float64)
+            slope, intercept = np.polyfit(x, y, 1)
+            fit = (slope * x) + intercept
+            reg_now = float((slope * (window - 1)) + intercept)
+            resid_std = float(np.std(y - fit))
+            upper = reg_now + (2.0 * resid_std)
+            lower = reg_now - (2.0 * resid_std)
+            denom = current_price + 1e-8
+            features.extend([
+                (reg_now - current_price) / denom,
+                (upper - current_price) / denom,
+                (lower - current_price) / denom,
+            ])
+        return features
+
     def _get_btc_features(self) -> list[float]:
         try:
             ticker = self.exchange.fetch_ticker("BTC/USD")
             btc_price = float(ticker.get("last") or 0.0)
             if btc_price <= 0.0:
-                return [0.0, 0.0, 0.0]
-            self.btc_prices.append(btc_price)
+                return [0.0] * len(BTC_FEATURE_COLUMNS)
 
-            alpha = 2.0 / (20.0 + 1.0)
-            btc_ema20 = float(self.btc_prices[0])
-            for price in list(self.btc_prices)[1:]:
-                btc_ema20 = (alpha * float(price)) + ((1.0 - alpha) * btc_ema20)
+            self.btc_prices.append(btc_price)
+            self.btc_prices_rsi.append(btc_price)
+            self.btc_prices_lr.append(btc_price)
 
             btc_return_1 = 0.0
+            btc_return_4 = 0.0
+            btc_return_16 = 0.0
             if len(self.btc_prices) >= 2:
-                prev_btc = float(self.btc_prices[-2])
-                btc_return_1 = (btc_price - prev_btc) / (prev_btc + 1e-8)
+                prev = float(self.btc_prices[-2])
+                btc_return_1 = (btc_price - prev) / (prev + 1e-8)
+            if len(self.btc_prices) >= 5:
+                prev = float(self.btc_prices[-5])
+                btc_return_4 = (btc_price - prev) / (prev + 1e-8)
+            if len(self.btc_prices) >= 17:
+                prev = float(self.btc_prices[-17])
+                btc_return_16 = (btc_price - prev) / (prev + 1e-8)
 
-            eth_return_1 = 0.0
-            if len(self.df) >= 2:
-                prev_eth = float(self.df["close"].iloc[-2])
+            btc_series = pd.Series(list(self.btc_prices), dtype=np.float64)
+            btc_ema20 = float(EMAIndicator(close=btc_series, window=max(1, min(20, len(btc_series)))).ema_indicator().iloc[-1])
+            btc_ema20_dev = (btc_price / (btc_ema20 + 1e-8)) - 1.0
+
+            btc_rsi_norm = 0.0
+            if len(self.btc_prices_rsi) >= 14:
+                rsi_series = RSIIndicator(close=pd.Series(list(self.btc_prices_rsi), dtype=np.float64), window=14).rsi()
+                rsi_last = float(rsi_series.iloc[-1]) if not np.isnan(rsi_series.iloc[-1]) else 50.0
+                btc_rsi_norm = (rsi_last - 50.0) / 50.0
+
+            def eth_ret(lag: int) -> float:
+                if len(self.df) < lag + 1:
+                    return 0.0
+                prev_eth = float(self.df["close"].iloc[-(lag + 1)])
                 curr_eth = float(self.df["close"].iloc[-1])
-                eth_return_1 = (curr_eth - prev_eth) / (prev_eth + 1e-8)
+                return (curr_eth - prev_eth) / (prev_eth + 1e-8)
+
+            btc_lr60_mid = 0.0
+            btc_lr60_upper = 0.0
+            if len(self.btc_prices_lr) >= 60:
+                y = np.array(list(self.btc_prices_lr)[-60:], dtype=np.float64)
+                x = np.arange(60, dtype=np.float64)
+                slope, intercept = np.polyfit(x, y, 1)
+                fit = (slope * x) + intercept
+                reg_now = float((slope * 59) + intercept)
+                resid_std = float(np.std(y - fit))
+                btc_lr60_mid = (reg_now - btc_price) / (btc_price + 1e-8)
+                btc_lr60_upper = ((reg_now + 2.0 * resid_std) - btc_price) / (btc_price + 1e-8)
 
             return [
-                (btc_price / (btc_ema20 + 1e-8)) - 1.0,
                 btc_return_1,
-                btc_return_1 - eth_return_1,
+                btc_return_4,
+                btc_return_16,
+                btc_ema20_dev,
+                btc_rsi_norm,
+                btc_return_1 - eth_ret(1),
+                btc_return_4 - eth_ret(4),
+                btc_return_16 - eth_ret(16),
+                btc_lr60_mid,
+                btc_lr60_upper,
             ]
         except Exception:
-            return [0.0, 0.0, 0.0]
+            return [0.0] * len(BTC_FEATURE_COLUMNS)
 
     def _compute_observation(self, usd_balance: float, eth_balance: float) -> np.ndarray:
         df = self.df.copy()
@@ -465,8 +536,10 @@ class KrakenLiveEnv(gym.Env):
         trend_lags: list[float] = []
         for prefix in TREND_PREFIXES:
             series = series_map[prefix]
-            for n in LAG_VALUES:
+            for n in TREND_LAG_VALUES:
                 trend_lags.append(self._series_lag_value(series, n, transform="tanh"))
+
+        lr_channel_features = self._compute_lr_channel_features(close, current_price)
 
         order_book_features = [0.0] * 5
         try:
@@ -526,6 +599,7 @@ class KrakenLiveEnv(gym.Env):
             + vol_lags
             + scalar_features
             + trend_lags
+            + lr_channel_features
             + order_book_features
             + portfolio_features
             + self_awareness
@@ -699,6 +773,8 @@ class KrakenLiveEnv(gym.Env):
         self.position_entry_step = None
         self.pending_order_id = None
         self.btc_prices.clear()
+        self.btc_prices_rsi.clear()
+        self.btc_prices_lr.clear()
         self.kill_switch = False
         self.consecutive_errors = 0
 
