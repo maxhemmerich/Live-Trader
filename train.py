@@ -12,7 +12,10 @@ live training with step-by-step console output.
 from __future__ import annotations
 
 import argparse
+import glob
 import os
+import re
+import zipfile
 from typing import Any
 
 from stable_baselines3 import SAC
@@ -104,14 +107,50 @@ def run_training(total_timesteps: int, checkpoint_every: int) -> None:
 
     latest_checkpoint = env.get_latest_checkpoint()
     pretrained_checkpoint = os.path.join(env.checkpoint_dir, "pretrained_sac.zip")
+    pretrain_checkpoints = glob.glob(
+        os.path.join(env.checkpoint_dir, "pretrain_checkpoint_*.zip")
+    )
 
+    def _pretrain_sort_key(path: str) -> int:
+        match = re.search(r"pretrain_checkpoint_(\d+)\.zip$", os.path.basename(path))
+        return int(match.group(1)) if match else -1
+
+    pretrain_checkpoints.sort(key=_pretrain_sort_key, reverse=True)
+
+    def _load_latest_valid_checkpoint(checkpoints: list[str], source_name: str) -> SAC | None:
+        for checkpoint in checkpoints:
+            try:
+                print(f"[train] Model source: {source_name} ({checkpoint})")
+                return SAC.load(checkpoint, env=env)
+            except (EOFError, zipfile.BadZipFile) as exc:
+                print(
+                    f"[train][warn] Failed to load checkpoint due to corruption: {checkpoint} ({exc}). "
+                    "Deleting file and trying next most recent checkpoint."
+                )
+                if os.path.exists(checkpoint):
+                    os.remove(checkpoint)
+        return None
+
+    live_checkpoints: list[str] = []
     if latest_checkpoint and os.path.exists(latest_checkpoint):
-        print(f"[train] Model source: live checkpoint ({latest_checkpoint})")
-        model = SAC.load(latest_checkpoint, env=env)
-    elif os.path.exists(pretrained_checkpoint):
+        live_checkpoints = sorted(
+            glob.glob(os.path.join(env.checkpoint_dir, "sac_step_*.zip")),
+            key=env._checkpoint_sort_key,
+            reverse=True,
+        )
+
+    model = _load_latest_valid_checkpoint(live_checkpoints, "live checkpoint")
+
+    if model is None:
+        model = _load_latest_valid_checkpoint(
+            pretrain_checkpoints,
+            "pretrain checkpoint",
+        )
+
+    if model is None and os.path.exists(pretrained_checkpoint):
         print(f"[train] Model source: pretrained checkpoint ({pretrained_checkpoint})")
         model = SAC.load(pretrained_checkpoint, env=env)
-    else:
+    elif model is None:
         print("[train] Model source: fresh initialization (no live or pretrained checkpoint found)")
         model = SAC(
             "MlpPolicy",
