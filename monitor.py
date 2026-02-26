@@ -293,7 +293,7 @@ fig4.add_trace(
         name="Portfolio Value",
         line=dict(color="#2ca02c", width=2),
     ),
-    secondary_y=False,
+    secondary_y=True,
 )
 fig4.add_trace(
     go.Scatter(
@@ -309,8 +309,8 @@ fig4.update_layout(
     showlegend=True,
 )
 fig4.update_xaxes(title_text="Global Step")
-fig4.update_yaxes(title_text="USD", secondary_y=False)
-fig4.update_yaxes(title_text="ETH Allocation (%)", secondary_y=True)
+fig4.update_yaxes(title_text="ETH/USD Price", secondary_y=False)
+fig4.update_yaxes(title_text="Portfolio Value (USD) / ETH Allocation (%)", secondary_y=True)
 st.plotly_chart(fig4, width="stretch")
 
 # ── Recent trades ──────────────────────────────────────────────────────────
