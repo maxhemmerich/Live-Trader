@@ -330,33 +330,42 @@ class KrakenBacktestEnv(gym.Env):
         self.df["eth_return_4"] = close.pct_change(4).fillna(0.0)
         self.df["eth_return_16"] = close.pct_change(16).fillna(0.0)
 
+        btc_feature_cols = [
+            "btc_return_1",
+            "btc_return_4",
+            "btc_return_16",
+            "btc_ema20_dev",
+            "btc_rsi14_norm",
+            "btc_lr60_mid",
+            "btc_lr60_upper",
+        ]
+
+        if self.btc_available and self.btc_df is not None:
+            btc_features = self.btc_df[["ts", *btc_feature_cols]].sort_values("ts")
+            self.df = pd.merge_asof(
+                self.df.sort_values("ts"),
+                btc_features,
+                on="ts",
+                direction="backward",
+            ).sort_index()
+            self.df[btc_feature_cols] = self.df[btc_feature_cols].fillna(0.0)
+        else:
+            for col in btc_feature_cols:
+                self.df[col] = 0.0
+
     def _get_btc_features(self) -> list[float]:
-        if not self.btc_available or self.btc_df is None:
-            return [0.0] * 10
-
-        ts = int(self.df.iloc[self.current_pos]["ts"])
-        btc_rows = self.btc_df[self.btc_df["ts"] <= ts]
-        if btc_rows.empty:
-            return [0.0] * 10
-
-        btc_row = btc_rows.iloc[-1]
-        btc_price = float(btc_row["close"])
-        self.btc_prices.append(btc_price)
-        self.btc_prices_rsi.append(btc_price)
-        self.btc_prices_lr.append(btc_price)
-
         eth_row = self.df.iloc[self.current_pos]
         return [
-            float(btc_row.get("btc_return_1", 0.0)),
-            float(btc_row.get("btc_return_4", 0.0)),
-            float(btc_row.get("btc_return_16", 0.0)),
-            float(btc_row.get("btc_ema20_dev", 0.0)),
-            float(btc_row.get("btc_rsi14_norm", 0.0)),
-            float(btc_row.get("btc_return_1", 0.0) - eth_row.get("eth_return_1", 0.0)),
-            float(btc_row.get("btc_return_4", 0.0) - eth_row.get("eth_return_4", 0.0)),
-            float(btc_row.get("btc_return_16", 0.0) - eth_row.get("eth_return_16", 0.0)),
-            float(btc_row.get("btc_lr60_mid", 0.0)),
-            float(btc_row.get("btc_lr60_upper", 0.0)),
+            float(eth_row.get("btc_return_1", 0.0)),
+            float(eth_row.get("btc_return_4", 0.0)),
+            float(eth_row.get("btc_return_16", 0.0)),
+            float(eth_row.get("btc_ema20_dev", 0.0)),
+            float(eth_row.get("btc_rsi14_norm", 0.0)),
+            float(eth_row.get("btc_return_1", 0.0) - eth_row.get("eth_return_1", 0.0)),
+            float(eth_row.get("btc_return_4", 0.0) - eth_row.get("eth_return_4", 0.0)),
+            float(eth_row.get("btc_return_16", 0.0) - eth_row.get("eth_return_16", 0.0)),
+            float(eth_row.get("btc_lr60_mid", 0.0)),
+            float(eth_row.get("btc_lr60_upper", 0.0)),
         ]
 
     def _compute_observation(self, usd_balance: float, eth_balance: float) -> np.ndarray:
