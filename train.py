@@ -175,14 +175,11 @@ def run_training(total_timesteps: int, checkpoint_every: int) -> None:
         model.learn(total_timesteps=1, reset_num_timesteps=False, callback=callback)
 
         if step % 10 == 0:
-            ent_coef = (
-                float(model.ent_coef_tensor.item())
-                if hasattr(model, "ent_coef_tensor")
-                else float(model.ent_coef)
-                if isinstance(model.ent_coef, float)
-                else "N/A"
-            )
-            ent_coef_text = f"{ent_coef:.4f}" if isinstance(ent_coef, float) else ent_coef
+            try:
+                ent_coef = float(model.ent_coef_tensor.detach().cpu().item())
+            except Exception:
+                ent_coef = float(model.ent_coef) if isinstance(model.ent_coef, float) else -1.0
+            ent_coef_text = f"{ent_coef:.4f}" if ent_coef >= 0 else "N/A"
 
             logged_metrics = getattr(model.logger, "name_to_value", {})
 
@@ -206,7 +203,7 @@ def run_training(total_timesteps: int, checkpoint_every: int) -> None:
                 str(global_step),
                 "" if actor_loss is None else f"{actor_loss:.10f}",
                 "" if critic_loss is None else f"{critic_loss:.10f}",
-                "" if not isinstance(ent_coef, float) else f"{ent_coef:.10f}",
+                f"{ent_coef:.10f}",
             ]
             with sac_log_path.open("a", encoding="utf-8") as f:
                 f.write(",".join(sac_log_row) + "\n")

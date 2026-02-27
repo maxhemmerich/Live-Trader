@@ -353,7 +353,7 @@ st.plotly_chart(fig4, width="stretch")
 
 if sac_df is not None and not sac_df.empty:
     sac_plot = sac_df.copy()
-    for col in ["global_step", "actor_loss", "critic_loss"]:
+    for col in ["global_step", "actor_loss", "critic_loss", "ent_coef"]:
         if col in sac_plot.columns:
             sac_plot[col] = pd.to_numeric(sac_plot[col], errors="coerce")
     sac_plot = sac_plot.dropna(subset=["global_step", "actor_loss", "critic_loss"])
@@ -378,6 +378,18 @@ if sac_df is not None and not sac_df.empty:
             ),
             secondary_y=True,
         )
+        if "ent_coef" in sac_plot.columns:
+            ent_coef_plot = sac_plot.dropna(subset=["ent_coef"])
+            if not ent_coef_plot.empty:
+                fig5.add_trace(
+                    go.Scatter(
+                        x=ent_coef_plot["global_step"],
+                        y=ent_coef_plot["ent_coef"],
+                        name="Entropy Coef",
+                        line=dict(color="#17becf", width=2, dash="dot"),
+                    ),
+                    secondary_y=False,
+                )
         fig5.add_hline(
             y=0,
             line_width=1,
@@ -386,7 +398,7 @@ if sac_df is not None and not sac_df.empty:
             annotation_text="actor loss = 0",
             annotation_position="top left",
         )
-        fig5.update_layout(title="Actor & Critic Loss Over Global Step")
+        fig5.update_layout(title="Actor/Critic Loss & Entropy Coef Over Global Step")
         fig5.update_xaxes(title_text="Global Step")
         fig5.update_yaxes(title_text="Actor Loss", secondary_y=False)
         fig5.update_yaxes(title_text="Critic Loss", secondary_y=True)
