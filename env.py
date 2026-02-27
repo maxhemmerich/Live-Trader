@@ -819,20 +819,21 @@ class KrakenLiveEnv(gym.Env):
             bids, asks = [], []
 
         if not self.kill_switch and bids and asks:
-            if action_raw > 0.5:
+            target_eth_alloc: Optional[float] = None
+            if action_raw > 0.3:
                 target_eth_alloc = 1.0
-            elif action_raw < -0.5:
+            elif action_raw < -0.3:
                 target_eth_alloc = 0.0
-            else:
-                target_eth_alloc = 0.5
 
             eth_value = eth_balance * current_price
             portfolio_usd_before = eth_value + usd_balance
-            alloc_diff_threshold = 0.10 * portfolio_usd_before
-            target_eth_value = portfolio_usd_before * target_eth_alloc
-            eth_value_gap = target_eth_value - eth_value
+            eth_value_gap = 0.0
+            if target_eth_alloc is not None:
+                alloc_diff_threshold = 0.10 * portfolio_usd_before
+                target_eth_value = portfolio_usd_before * target_eth_alloc
+                eth_value_gap = target_eth_value - eth_value
 
-            if portfolio_usd_before > 0 and abs(eth_value_gap) > alloc_diff_threshold:
+            if target_eth_alloc is not None and portfolio_usd_before > 0 and abs(eth_value_gap) > alloc_diff_threshold:
                 if eth_value_gap > 0:
                     quote_price = float(bids[0][0])
                     order_eth = eth_value_gap / max(quote_price, 1e-8)
