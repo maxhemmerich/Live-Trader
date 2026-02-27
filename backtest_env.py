@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import os
 import time
 from collections import deque
@@ -17,67 +16,35 @@ from ta.trend import CCIIndicator, EMAIndicator, MACD
 from ta.volatility import AverageTrueRange, BollingerBands
 from ta.volume import OnBalanceVolumeIndicator
 
-_NUMBA_SPEC = importlib.util.find_spec("numba")
-if _NUMBA_SPEC is not None:
-    numba = importlib.import_module("numba")
-
-    @numba.jit(nopython=True)
-    def _vectorized_lr_channel(close_arr: np.ndarray, window: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        n = len(close_arr)
-        x = np.arange(window, dtype=np.float64)
-        x_mean = x.mean()
-        x_var = ((x - x_mean) ** 2).sum()
-
-        result_mid = np.full(n, np.nan, dtype=np.float64)
-        result_upper = np.full(n, np.nan, dtype=np.float64)
-        result_lower = np.full(n, np.nan, dtype=np.float64)
-
-        for i in range(window - 1, n):
-            y = close_arr[i - window + 1 : i + 1]
-            y_mean = y.mean()
-            slope = ((x - x_mean) * (y - y_mean)).sum() / x_var
-            intercept = y_mean - slope * x_mean
-            predicted = (slope * x) + intercept
-            residuals = y - predicted
-            std = residuals.std()
-            mid = predicted[-1]
-
-            close_now = close_arr[i]
-            denom = close_now + 1e-8
-            result_mid[i] = (mid - close_now) / denom
-            result_upper[i] = (mid + (2.0 * std) - close_now) / denom
-            result_lower[i] = (mid - (2.0 * std) - close_now) / denom
-
+def _fast_lr_channel(close_arr: np.ndarray, window: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    n = len(close_arr)
+    result_mid = np.full(n, np.nan, dtype=np.float64)
+    result_upper = np.full(n, np.nan, dtype=np.float64)
+    result_lower = np.full(n, np.nan, dtype=np.float64)
+    if window <= 1 or n < window:
         return result_mid, result_upper, result_lower
-else:
 
-    def _vectorized_lr_channel(close_arr: np.ndarray, window: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        n = len(close_arr)
-        x = np.arange(window, dtype=np.float64)
-        x_mean = x.mean()
-        x_var = ((x - x_mean) ** 2).sum()
+    x = np.arange(window, dtype=np.float64)
+    x_mean = (window - 1) / 2.0
+    ss_xx = (window * (window - 1) * (2 * window - 1) / 6.0) - (window * (x_mean**2))
+    windows = np.lib.stride_tricks.sliding_window_view(close_arr, window)
 
-        result_mid = np.full(n, np.nan, dtype=np.float64)
-        result_upper = np.full(n, np.nan, dtype=np.float64)
-        result_lower = np.full(n, np.nan, dtype=np.float64)
+    y_means = windows.mean(axis=1)
+    ss_xy = ((windows - y_means[:, None]) * (x - x_mean)).sum(axis=1)
+    slopes = ss_xy / (ss_xx + 1e-12)
+    intercepts = y_means - (slopes * x_mean)
+    predicted_last = (slopes * (window - 1)) + intercepts
 
-        for i in range(window - 1, n):
-            y = close_arr[i - window + 1 : i + 1]
-            y_mean = y.mean()
-            slope = ((x - x_mean) * (y - y_mean)).sum() / x_var
-            intercept = y_mean - slope * x_mean
-            predicted = (slope * x) + intercept
-            residuals = y - predicted
-            std = residuals.std()
-            mid = predicted[-1]
+    fitted = (slopes[:, None] * x) + intercepts[:, None]
+    residuals = windows - fitted
+    stds = residuals.std(axis=1)
 
-            close_now = close_arr[i]
-            denom = close_now + 1e-8
-            result_mid[i] = (mid - close_now) / denom
-            result_upper[i] = (mid + (2.0 * std) - close_now) / denom
-            result_lower[i] = (mid - (2.0 * std) - close_now) / denom
-
-        return result_mid, result_upper, result_lower
+    close_now = close_arr[window - 1 :]
+    denom = close_now + 1e-8
+    result_mid[window - 1 :] = (predicted_last - close_now) / denom
+    result_upper[window - 1 :] = (predicted_last + (2.0 * stds) - close_now) / denom
+    result_lower[window - 1 :] = (predicted_last - (2.0 * stds) - close_now) / denom
+    return result_mid, result_upper, result_lower
 
 from env import (
     FEATURE_COLUMNS,
@@ -153,16 +120,6 @@ class KrakenBacktestEnv(gym.Env):
             f"[KrakenBacktestEnv] Completed load: {total_rows_loaded:,} rows "
             f"in {load_duration_seconds:.2f}s"
         )
-
-        lr_init_start_time = time.perf_counter()
-        close_full = self.full_df["close"].astype(np.float64)
-        for window in [60, 1440, 10080, 40000]:
-            mid, upper, lower = self._rolling_lr_channel(close_full, window)
-            self.full_df[f"lr{window}_mid"] = mid.fillna(0.0)
-            self.full_df[f"lr{window}_upper"] = upper.fillna(0.0)
-            self.full_df[f"lr{window}_lower"] = lower.fillna(0.0)
-        lr_init_duration_seconds = time.perf_counter() - lr_init_start_time
-        print(f"[KrakenBacktestEnv] One-time LR init completed in {lr_init_duration_seconds:.2f}s")
 
         btc_csv_path = "D:/BTCUSD_1.csv"
         if os.path.exists(btc_csv_path):
@@ -327,7 +284,7 @@ class KrakenBacktestEnv(gym.Env):
 
     def _rolling_lr_channel(self, series: pd.Series, window: int) -> tuple[pd.Series, pd.Series, pd.Series]:
         values = series.to_numpy(dtype=np.float64)
-        mid, upper, lower = _vectorized_lr_channel(values, window)
+        mid, upper, lower = _fast_lr_channel(values, window)
         return (
             pd.Series(mid, index=series.index),
             pd.Series(upper, index=series.index),
@@ -410,27 +367,14 @@ class KrakenBacktestEnv(gym.Env):
         self.df["obv_pct_change"] = obv.pct_change()
         _log_block_timing("derived_indicator_features", block_start_time)
 
-        block_start_time = time.perf_counter()
-        lr_columns = [
-            "lr60_mid",
-            "lr60_upper",
-            "lr60_lower",
-            "lr1440_mid",
-            "lr1440_upper",
-            "lr1440_lower",
-            "lr10080_mid",
-            "lr10080_upper",
-            "lr10080_lower",
-            "lr40000_mid",
-            "lr40000_upper",
-            "lr40000_lower",
-        ]
-        self.df[lr_columns] = (
-            self.full_df.iloc[self.window_start_idx : self.window_end_idx + 1][lr_columns]
-            .reset_index(drop=True)
-            .to_numpy()
-        )
-        _log_block_timing("lr_slice_copy", block_start_time)
+        close_np = close.to_numpy(dtype=np.float64)
+        for lr_window in [60, 1440, 10080, 40000]:
+            block_start_time = time.perf_counter()
+            lr_mid, lr_upper, lr_lower = _fast_lr_channel(close_np, lr_window)
+            self.df[f"lr{lr_window}_mid"] = np.nan_to_num(lr_mid, nan=0.0)
+            self.df[f"lr{lr_window}_upper"] = np.nan_to_num(lr_upper, nan=0.0)
+            self.df[f"lr{lr_window}_lower"] = np.nan_to_num(lr_lower, nan=0.0)
+            _log_block_timing(f"lr_channel_{lr_window}", block_start_time)
 
         block_start_time = time.perf_counter()
         vol20 = vol.rolling(20).mean().replace(0.0, np.nan)
