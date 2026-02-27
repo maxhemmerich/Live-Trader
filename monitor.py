@@ -14,6 +14,7 @@ Features:
 """
 
 import os
+import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -29,6 +30,7 @@ st.set_page_config(
 )
 
 LOG_CSV      = "trading_log.csv"
+SAC_LOG_CSV  = "sac_log.csv"
 
 # ── Sidebar controls ───────────────────────────────────────────────────────
 st.sidebar.title("Dashboard Controls")
@@ -41,6 +43,7 @@ refresh_interval = st.sidebar.slider(
 )
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Log file: `{LOG_CSV}`")
+st.sidebar.caption(f"SAC log file: `{SAC_LOG_CSV}`")
 
 # ── Auto-refresh ───────────────────────────────────────────────────────────
 refresh_count = st_autorefresh(
@@ -67,7 +70,20 @@ def load_log(path: str) -> pd.DataFrame | None:
         return None
 
 
+@st.cache_data(ttl=refresh_interval)
+def load_sac_log(path: str) -> pd.DataFrame | None:
+    """Load SAC metric log if present. Returns None when unavailable."""
+    if not os.path.exists(path):
+        return None
+    try:
+        return pd.read_csv(path)
+    except Exception as e:
+        st.warning(f"Failed to load SAC metrics log: {e}", icon="⚠️")
+        return None
+
+
 df = load_log(LOG_CSV)
+sac_df = load_sac_log(SAC_LOG_CSV)
 
 if df is None or df.empty:
     st.warning(
@@ -166,6 +182,22 @@ st.markdown("<div style='height: 0.75rem;'></div>", unsafe_allow_html=True)
 
 col6, col7, col8, col9, col10, col11, col12, col13 = st.columns(8)
 
+learning_health = "No Data"
+learning_health_detail = "Need at least 10 SAC actor-loss points"
+if sac_df is not None and not sac_df.empty and "actor_loss" in sac_df.columns:
+    actor_series = pd.to_numeric(sac_df["actor_loss"], errors="coerce").dropna().tail(10)
+    if len(actor_series) >= 2:
+        x_idx = np.arange(len(actor_series), dtype=float)
+        actor_slope = float(np.polyfit(x_idx, actor_series.to_numpy(dtype=float), 1)[0])
+        latest_actor_loss = float(actor_series.iloc[-1])
+        if actor_slope < -1e-3:
+            learning_health = "Improving"
+        elif actor_slope > 1e-3 and latest_actor_loss > 2:
+            learning_health = "Diverging"
+        else:
+            learning_health = "Stalled"
+        learning_health_detail = f"actor slope (last 10): {actor_slope:+.5f}"
+
 col6.metric(
     label = "Trade Frequency",
     value = f"{trade_frequency:.1f} trades/hr",
@@ -198,6 +230,12 @@ col12.metric(
 col13.metric(
     label = "PnL Today",
     value = f"${pnl_today:+,.2f}",
+)
+
+st.metric(
+    label="Learning Health",
+    value=learning_health,
+    delta=learning_health_detail,
 )
 
 st.markdown("---")
@@ -312,6 +350,47 @@ fig4.update_xaxes(title_text="Global Step")
 fig4.update_yaxes(title_text="ETH/USD Price", secondary_y=False)
 fig4.update_yaxes(title_text="Portfolio Value (USD) / ETH Allocation (%)", secondary_y=True)
 st.plotly_chart(fig4, width="stretch")
+
+if sac_df is not None and not sac_df.empty:
+    sac_plot = sac_df.copy()
+    for col in ["global_step", "actor_loss", "critic_loss"]:
+        if col in sac_plot.columns:
+            sac_plot[col] = pd.to_numeric(sac_plot[col], errors="coerce")
+    sac_plot = sac_plot.dropna(subset=["global_step", "actor_loss", "critic_loss"])
+
+    if not sac_plot.empty:
+        fig5 = make_subplots(specs=[[{"secondary_y": True}]])
+        fig5.add_trace(
+            go.Scatter(
+                x=sac_plot["global_step"],
+                y=sac_plot["actor_loss"],
+                name="Actor Loss",
+                line=dict(color="#9467bd", width=2),
+            ),
+            secondary_y=False,
+        )
+        fig5.add_trace(
+            go.Scatter(
+                x=sac_plot["global_step"],
+                y=sac_plot["critic_loss"],
+                name="Critic Loss",
+                line=dict(color="#8c564b", width=2),
+            ),
+            secondary_y=True,
+        )
+        fig5.add_hline(
+            y=0,
+            line_width=1,
+            line_dash="dash",
+            line_color="gray",
+            annotation_text="actor loss = 0",
+            annotation_position="top left",
+        )
+        fig5.update_layout(title="Actor & Critic Loss Over Global Step")
+        fig5.update_xaxes(title_text="Global Step")
+        fig5.update_yaxes(title_text="Actor Loss", secondary_y=False)
+        fig5.update_yaxes(title_text="Critic Loss", secondary_y=True)
+        st.plotly_chart(fig5, width="stretch")
 
 # ── Recent trades ──────────────────────────────────────────────────────────
 st.subheader("Recent Trades (Last 20 Buy/Sell Actions)")
