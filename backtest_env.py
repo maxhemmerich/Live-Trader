@@ -520,20 +520,21 @@ class KrakenBacktestEnv(gym.Env):
         trade_filled = False
         filled_price = None
 
-        if action_raw > 0.5:
+        target_eth_alloc: Optional[float] = None
+        if action_raw > 0.3:
             target_eth_alloc = 1.0
-        elif action_raw < -0.5:
+        elif action_raw < -0.3:
             target_eth_alloc = 0.0
-        else:
-            target_eth_alloc = 0.5
 
         eth_value = self.eth_balance * execution_price
         portfolio_before = eth_value + self.usd_balance
-        target_eth_value = portfolio_before * target_eth_alloc
-        eth_value_gap = target_eth_value - eth_value
-        alloc_diff_threshold = 0.10 * portfolio_before
+        eth_value_gap = 0.0
+        if target_eth_alloc is not None:
+            target_eth_value = portfolio_before * target_eth_alloc
+            eth_value_gap = target_eth_value - eth_value
+            alloc_diff_threshold = 0.10 * portfolio_before
 
-        if portfolio_before > 0 and abs(eth_value_gap) > alloc_diff_threshold:
+        if target_eth_alloc is not None and portfolio_before > 0 and abs(eth_value_gap) > alloc_diff_threshold:
             if eth_value_gap > 0:
                 buy_eth = eth_value_gap / max(execution_price, 1e-8)
                 max_affordable_eth = self.usd_balance / max(execution_price * (1.0 + MAKER_FEE), 1e-8)
