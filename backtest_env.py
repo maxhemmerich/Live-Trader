@@ -56,6 +56,15 @@ class KrakenBacktestEnv(gym.Env):
         self.btc_prices_lr: deque[float] = deque(maxlen=60)
         self.btc_df: Optional[pd.DataFrame] = None
         self.btc_available = False
+        self.btc_feature_cols = [
+            "btc_return_1",
+            "btc_return_4",
+            "btc_return_16",
+            "btc_ema20_dev",
+            "btc_rsi14_norm",
+            "btc_lr60_mid",
+            "btc_lr60_upper",
+        ]
 
         print(f"[KrakenBacktestEnv] Starting init for CSV: {self.csv_path}")
         load_start_time = time.perf_counter()
@@ -132,6 +141,22 @@ class KrakenBacktestEnv(gym.Env):
             )
             self.btc_df["ts"] = self.btc_df["ts"] * 1000
             self.btc_available = len(self.btc_df) > 0
+            if self.btc_available:
+                btc_init_start_time = time.perf_counter()
+                btc_close = self.btc_df["close"].astype(np.float64)
+                self.btc_df["btc_return_1"] = btc_close.pct_change(1).fillna(0.0)
+                self.btc_df["btc_return_4"] = btc_close.pct_change(4).fillna(0.0)
+                self.btc_df["btc_return_16"] = btc_close.pct_change(16).fillna(0.0)
+                btc_ema20 = EMAIndicator(close=btc_close, window=20).ema_indicator()
+                self.btc_df["btc_ema20_dev"] = ((btc_close / (btc_ema20 + 1e-8)) - 1.0).fillna(0.0)
+                btc_rsi14 = RSIIndicator(close=btc_close, window=14).rsi()
+                self.btc_df["btc_rsi14_norm"] = ((btc_rsi14 - 50.0) / 50.0).fillna(0.0)
+                btc_mid, btc_upper, _ = self._rolling_lr_channel(btc_close, 60)
+                self.btc_df["btc_lr60_mid"] = ((btc_mid - btc_close) / (btc_close + 1e-8)).fillna(0.0)
+                self.btc_df["btc_lr60_upper"] = ((btc_upper - btc_close) / (btc_close + 1e-8)).fillna(0.0)
+                self.btc_df = self.btc_df.sort_values("ts").reset_index(drop=True)
+                btc_init_duration_seconds = time.perf_counter() - btc_init_start_time
+                print(f"[KrakenBacktestEnv] BTC one-time indicator init completed in {btc_init_duration_seconds:.2f}s")
         else:
             print("[KrakenBacktestEnv] WARNING: D:/BTCUSD_1.csv not found. BTC features will be zeros.")
 
@@ -248,30 +273,6 @@ class KrakenBacktestEnv(gym.Env):
         if self.df.empty:
             return
 
-        btc_feature_cols = [
-            "btc_return_1",
-            "btc_return_4",
-            "btc_return_16",
-            "btc_ema20_dev",
-            "btc_rsi14_norm",
-            "btc_lr60_mid",
-            "btc_lr60_upper",
-        ]
-
-        if self.btc_available and self.btc_df is not None:
-            btc_close = self.btc_df["close"].astype(np.float64)
-            self.btc_df["btc_return_1"] = btc_close.pct_change(1).fillna(0.0)
-            self.btc_df["btc_return_4"] = btc_close.pct_change(4).fillna(0.0)
-            self.btc_df["btc_return_16"] = btc_close.pct_change(16).fillna(0.0)
-            btc_ema20 = EMAIndicator(close=btc_close, window=20).ema_indicator()
-            self.btc_df["btc_ema20_dev"] = ((btc_close / (btc_ema20 + 1e-8)) - 1.0).fillna(0.0)
-            btc_rsi14 = RSIIndicator(close=btc_close, window=14).rsi()
-            self.btc_df["btc_rsi14_norm"] = ((btc_rsi14 - 50.0) / 50.0).fillna(0.0)
-
-            btc_mid, btc_upper, _ = self._rolling_lr_channel(btc_close, 60)
-            self.btc_df["btc_lr60_mid"] = ((btc_mid - btc_close) / (btc_close + 1e-8)).fillna(0.0)
-            self.btc_df["btc_lr60_upper"] = ((btc_upper - btc_close) / (btc_close + 1e-8)).fillna(0.0)
-
         close = self.df["close"]
         vol = self.df["vol"]
         high = self.df["high"]
@@ -338,16 +339,19 @@ class KrakenBacktestEnv(gym.Env):
         self.df["eth_return_16"] = close.pct_change(16).fillna(0.0)
 
         if self.btc_available and self.btc_df is not None:
-            btc_features = self.btc_df[["ts", *btc_feature_cols]].sort_values("ts")
+            btc_merge_start_time = time.perf_counter()
+            btc_features = self.btc_df[["ts", *self.btc_feature_cols]]
             self.df = pd.merge_asof(
                 self.df.sort_values("ts"),
                 btc_features,
                 on="ts",
                 direction="backward",
             ).sort_index()
-            self.df[btc_feature_cols] = self.df[btc_feature_cols].fillna(0.0)
+            self.df[self.btc_feature_cols] = self.df[self.btc_feature_cols].fillna(0.0)
+            btc_merge_duration_seconds = time.perf_counter() - btc_merge_start_time
+            print(f"[KrakenBacktestEnv] BTC per-episode merge completed in {btc_merge_duration_seconds:.2f}s")
         else:
-            for col in btc_feature_cols:
+            for col in self.btc_feature_cols:
                 self.df[col] = 0.0
 
     def _get_btc_features(self) -> list[float]:
