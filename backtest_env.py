@@ -154,6 +154,16 @@ class KrakenBacktestEnv(gym.Env):
             f"in {load_duration_seconds:.2f}s"
         )
 
+        lr_init_start_time = time.perf_counter()
+        close_full = self.full_df["close"].astype(np.float64)
+        for window in [60, 1440, 10080, 40000]:
+            mid, upper, lower = self._rolling_lr_channel(close_full, window)
+            self.full_df[f"lr{window}_mid"] = mid.fillna(0.0)
+            self.full_df[f"lr{window}_upper"] = upper.fillna(0.0)
+            self.full_df[f"lr{window}_lower"] = lower.fillna(0.0)
+        lr_init_duration_seconds = time.perf_counter() - lr_init_start_time
+        print(f"[KrakenBacktestEnv] One-time LR init completed in {lr_init_duration_seconds:.2f}s")
+
         btc_csv_path = "D:/BTCUSD_1.csv"
         if os.path.exists(btc_csv_path):
             self.btc_df = pd.read_csv(btc_csv_path, header=0)
@@ -400,13 +410,27 @@ class KrakenBacktestEnv(gym.Env):
         self.df["obv_pct_change"] = obv.pct_change()
         _log_block_timing("derived_indicator_features", block_start_time)
 
-        for window in [60, 1440, 10080, 40000]:
-            block_start_time = time.perf_counter()
-            mid, upper, lower = self._rolling_lr_channel(close.astype(np.float64), window)
-            self.df[f"lr{window}_mid"] = mid.fillna(0.0)
-            self.df[f"lr{window}_upper"] = upper.fillna(0.0)
-            self.df[f"lr{window}_lower"] = lower.fillna(0.0)
-            _log_block_timing(f"lr{window}", block_start_time)
+        block_start_time = time.perf_counter()
+        lr_columns = [
+            "lr60_mid",
+            "lr60_upper",
+            "lr60_lower",
+            "lr1440_mid",
+            "lr1440_upper",
+            "lr1440_lower",
+            "lr10080_mid",
+            "lr10080_upper",
+            "lr10080_lower",
+            "lr40000_mid",
+            "lr40000_upper",
+            "lr40000_lower",
+        ]
+        self.df[lr_columns] = (
+            self.full_df.iloc[self.window_start_idx : self.window_end_idx + 1][lr_columns]
+            .reset_index(drop=True)
+            .to_numpy()
+        )
+        _log_block_timing("lr_slice_copy", block_start_time)
 
         block_start_time = time.perf_counter()
         vol20 = vol.rolling(20).mean().replace(0.0, np.nan)
