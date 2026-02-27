@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import os
 import time
 from collections import deque
@@ -15,6 +16,68 @@ from ta.momentum import RSIIndicator, StochasticOscillator, WilliamsRIndicator
 from ta.trend import CCIIndicator, EMAIndicator, MACD
 from ta.volatility import AverageTrueRange, BollingerBands
 from ta.volume import OnBalanceVolumeIndicator
+
+_NUMBA_SPEC = importlib.util.find_spec("numba")
+if _NUMBA_SPEC is not None:
+    numba = importlib.import_module("numba")
+
+    @numba.jit(nopython=True)
+    def _vectorized_lr_channel(close_arr: np.ndarray, window: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        n = len(close_arr)
+        x = np.arange(window, dtype=np.float64)
+        x_mean = x.mean()
+        x_var = ((x - x_mean) ** 2).sum()
+
+        result_mid = np.full(n, np.nan, dtype=np.float64)
+        result_upper = np.full(n, np.nan, dtype=np.float64)
+        result_lower = np.full(n, np.nan, dtype=np.float64)
+
+        for i in range(window - 1, n):
+            y = close_arr[i - window + 1 : i + 1]
+            y_mean = y.mean()
+            slope = ((x - x_mean) * (y - y_mean)).sum() / x_var
+            intercept = y_mean - slope * x_mean
+            predicted = (slope * x) + intercept
+            residuals = y - predicted
+            std = residuals.std()
+            mid = predicted[-1]
+
+            close_now = close_arr[i]
+            denom = close_now + 1e-8
+            result_mid[i] = (mid - close_now) / denom
+            result_upper[i] = (mid + (2.0 * std) - close_now) / denom
+            result_lower[i] = (mid - (2.0 * std) - close_now) / denom
+
+        return result_mid, result_upper, result_lower
+else:
+
+    def _vectorized_lr_channel(close_arr: np.ndarray, window: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        n = len(close_arr)
+        x = np.arange(window, dtype=np.float64)
+        x_mean = x.mean()
+        x_var = ((x - x_mean) ** 2).sum()
+
+        result_mid = np.full(n, np.nan, dtype=np.float64)
+        result_upper = np.full(n, np.nan, dtype=np.float64)
+        result_lower = np.full(n, np.nan, dtype=np.float64)
+
+        for i in range(window - 1, n):
+            y = close_arr[i - window + 1 : i + 1]
+            y_mean = y.mean()
+            slope = ((x - x_mean) * (y - y_mean)).sum() / x_var
+            intercept = y_mean - slope * x_mean
+            predicted = (slope * x) + intercept
+            residuals = y - predicted
+            std = residuals.std()
+            mid = predicted[-1]
+
+            close_now = close_arr[i]
+            denom = close_now + 1e-8
+            result_mid[i] = (mid - close_now) / denom
+            result_upper[i] = (mid + (2.0 * std) - close_now) / denom
+            result_lower[i] = (mid - (2.0 * std) - close_now) / denom
+
+        return result_mid, result_upper, result_lower
 
 from env import (
     FEATURE_COLUMNS,
@@ -152,8 +215,8 @@ class KrakenBacktestEnv(gym.Env):
                 btc_rsi14 = RSIIndicator(close=btc_close, window=14).rsi()
                 self.btc_df["btc_rsi14_norm"] = ((btc_rsi14 - 50.0) / 50.0).fillna(0.0)
                 btc_mid, btc_upper, _ = self._rolling_lr_channel(btc_close, 60)
-                self.btc_df["btc_lr60_mid"] = ((btc_mid - btc_close) / (btc_close + 1e-8)).fillna(0.0)
-                self.btc_df["btc_lr60_upper"] = ((btc_upper - btc_close) / (btc_close + 1e-8)).fillna(0.0)
+                self.btc_df["btc_lr60_mid"] = btc_mid.fillna(0.0)
+                self.btc_df["btc_lr60_upper"] = btc_upper.fillna(0.0)
                 self.btc_df = self.btc_df.sort_values("ts").reset_index(drop=True)
                 btc_init_duration_seconds = time.perf_counter() - btc_init_start_time
                 print(f"[KrakenBacktestEnv] BTC one-time indicator init completed in {btc_init_duration_seconds:.2f}s")
@@ -253,21 +316,13 @@ class KrakenBacktestEnv(gym.Env):
         return result / 100.0
 
     def _rolling_lr_channel(self, series: pd.Series, window: int) -> tuple[pd.Series, pd.Series, pd.Series]:
-        mid = pd.Series(np.zeros(len(series), dtype=np.float64), index=series.index)
-        upper = pd.Series(np.zeros(len(series), dtype=np.float64), index=series.index)
-        lower = pd.Series(np.zeros(len(series), dtype=np.float64), index=series.index)
         values = series.to_numpy(dtype=np.float64)
-        for idx in range(window - 1, len(values)):
-            y = values[idx - window + 1 : idx + 1]
-            x = np.arange(window, dtype=np.float64)
-            slope, intercept = np.polyfit(x, y, 1)
-            fit = (slope * x) + intercept
-            reg_now = (slope * (window - 1)) + intercept
-            resid_std = float(np.std(y - fit))
-            mid.iloc[idx] = reg_now
-            upper.iloc[idx] = reg_now + (2.0 * resid_std)
-            lower.iloc[idx] = reg_now - (2.0 * resid_std)
-        return mid, upper, lower
+        mid, upper, lower = _vectorized_lr_channel(values, window)
+        return (
+            pd.Series(mid, index=series.index),
+            pd.Series(upper, index=series.index),
+            pd.Series(lower, index=series.index),
+        )
 
     def _precompute_indicators(self) -> None:
         if self.df.empty:
@@ -348,9 +403,9 @@ class KrakenBacktestEnv(gym.Env):
         for window in [60, 1440, 10080, 40000]:
             block_start_time = time.perf_counter()
             mid, upper, lower = self._rolling_lr_channel(close.astype(np.float64), window)
-            self.df[f"lr{window}_mid"] = ((mid - close) / (close + 1e-8)).fillna(0.0)
-            self.df[f"lr{window}_upper"] = ((upper - close) / (close + 1e-8)).fillna(0.0)
-            self.df[f"lr{window}_lower"] = ((lower - close) / (close + 1e-8)).fillna(0.0)
+            self.df[f"lr{window}_mid"] = mid.fillna(0.0)
+            self.df[f"lr{window}_upper"] = upper.fillna(0.0)
+            self.df[f"lr{window}_lower"] = lower.fillna(0.0)
             _log_block_timing(f"lr{window}", block_start_time)
 
         block_start_time = time.perf_counter()
