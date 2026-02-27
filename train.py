@@ -16,6 +16,7 @@ import glob
 import os
 import re
 import zipfile
+from pathlib import Path
 from typing import Any
 
 from stable_baselines3 import SAC
@@ -166,6 +167,10 @@ def run_training(total_timesteps: int, checkpoint_every: int) -> None:
     callback = StepConsoleLogger()
     print(f"[train] Starting training loop for {total_timesteps} timesteps...")
 
+    sac_log_path = Path(env.trading_log_path).resolve().parent / "sac_log.csv"
+    if not sac_log_path.exists():
+        sac_log_path.write_text("global_step,actor_loss,critic_loss,ent_coef\n", encoding="utf-8")
+
     for step in range(1, total_timesteps + 1):
         model.learn(total_timesteps=1, reset_num_timesteps=False, callback=callback)
 
@@ -181,14 +186,33 @@ def run_training(total_timesteps: int, checkpoint_every: int) -> None:
 
             logged_metrics = getattr(model.logger, "name_to_value", {})
 
-            def metric_text(name: str) -> str:
+            def metric_value(name: str) -> float | None:
                 value = logged_metrics.get(name)
                 if value is None:
+                    return None
+                return float(value)
+
+            def metric_text(name: str) -> str:
+                value = metric_value(name)
+                if value is None:
                     return "N/A"
-                return f"{float(value):.4f}"
+                return f"{value:.4f}"
+
+            actor_loss = metric_value("train/actor_loss")
+            critic_loss = metric_value("train/critic_loss")
+            global_step = int(env.step_count)
+
+            sac_log_row = [
+                str(global_step),
+                "" if actor_loss is None else f"{actor_loss:.10f}",
+                "" if critic_loss is None else f"{critic_loss:.10f}",
+                "" if not isinstance(ent_coef, float) else f"{ent_coef:.10f}",
+            ]
+            with sac_log_path.open("a", encoding="utf-8") as f:
+                f.write(",".join(sac_log_row) + "\n")
 
             print(
-                f"[SAC] step={step} "
+                f"[SAC] step={global_step} "
                 f"| ent_coef={ent_coef_text} "
                 f"| actor_loss={metric_text('train/actor_loss')} "
                 f"| critic_loss={metric_text('train/critic_loss')} "
