@@ -338,68 +338,35 @@ class KrakenBacktestEnv(gym.Env):
         if self.df.empty:
             return
 
-        def _log_block_timing(block_name: str, block_start_time: float) -> None:
-            block_duration_seconds = time.perf_counter() - block_start_time
-            print(
-                f"[KrakenBacktestEnv] Indicator block '{block_name}' "
-                f"completed in {block_duration_seconds:.4f}s"
-            )
-
         close = self.df["close"]
         vol = self.df["vol"]
         high = self.df["high"]
         low = self.df["low"]
-
-        block_start_time = time.perf_counter()
         self.df["rsi_7_norm"] = RSIIndicator(close=close, window=7).rsi() / 100.0
         self.df["rsi_14_norm"] = RSIIndicator(close=close, window=14).rsi() / 100.0
         self.df["rsi_21_norm"] = RSIIndicator(close=close, window=21).rsi() / 100.0
-        _log_block_timing("rsi", block_start_time)
-
-        block_start_time = time.perf_counter()
         stoch = StochasticOscillator(high=high, low=low, close=close, window=14, smooth_window=3)
         self.df["stoch_k_norm"] = stoch.stoch() / 100.0
         self.df["stoch_d_norm"] = stoch.stoch_signal() / 100.0
-        _log_block_timing("stochastic", block_start_time)
-
-        block_start_time = time.perf_counter()
         self.df["cci_20_clipped"] = (
             CCIIndicator(high=high, low=low, close=close, window=20).cci() / 200.0
         ).clip(-1.0, 1.0)
         self.df["willr_14_norm"] = (
             WilliamsRIndicator(high=high, low=low, close=close, lbp=14).williams_r() + 100.0
         ) / 100.0
-        _log_block_timing("cci_williams_r", block_start_time)
-
-        block_start_time = time.perf_counter()
         self.df["adx_14_norm"] = self._fast_adx(high, low, close, window=14)
-        _log_block_timing("adx", block_start_time)
-
-        block_start_time = time.perf_counter()
         bb20 = BollingerBands(close=close, window=20, window_dev=2)
         bb50 = BollingerBands(close=close, window=50, window_dev=2)
         self.df["bb20_p"] = bb20.bollinger_pband()
-        _log_block_timing("bollinger", block_start_time)
-
-        block_start_time = time.perf_counter()
         atr14 = AverageTrueRange(high=high, low=low, close=close, window=14).average_true_range()
         self.df["atr_14_over_price"] = atr14 / (close + 1e-8)
         self.df["realized_vol_20_norm"] = close.pct_change().rolling(20).std() / 0.02
-        _log_block_timing("atr_realized_vol", block_start_time)
-
-        block_start_time = time.perf_counter()
         ema9 = EMAIndicator(close=close, window=9).ema_indicator()
         ema20 = EMAIndicator(close=close, window=20).ema_indicator()
         ema50 = EMAIndicator(close=close, window=50).ema_indicator()
         ema200 = EMAIndicator(close=close, window=200).ema_indicator()
         macd_hist = MACD(close=close, window_fast=12, window_slow=26, window_sign=9).macd_diff()
-        _log_block_timing("ema_macd", block_start_time)
-
-        block_start_time = time.perf_counter()
         obv = OnBalanceVolumeIndicator(close=close, volume=vol).on_balance_volume()
-        _log_block_timing("obv", block_start_time)
-
-        block_start_time = time.perf_counter()
         self.df["ema9"] = (close / (ema9 + 1e-8)) - 1.0
         self.df["ema20"] = (close / (ema20 + 1e-8)) - 1.0
         self.df["ema50"] = (close / (ema50 + 1e-8)) - 1.0
@@ -408,9 +375,6 @@ class KrakenBacktestEnv(gym.Env):
         self.df["bb20_width_price"] = (bb20.bollinger_hband() - bb20.bollinger_lband()) / (close + 1e-8)
         self.df["bb50_width_price"] = (bb50.bollinger_hband() - bb50.bollinger_lband()) / (close + 1e-8)
         self.df["obv_pct_change"] = obv.pct_change()
-        _log_block_timing("derived_indicator_features", block_start_time)
-
-        block_start_time = time.perf_counter()
         lr_columns = [
             "lr60_mid",
             "lr60_upper",
@@ -430,9 +394,6 @@ class KrakenBacktestEnv(gym.Env):
             .reset_index(drop=True)
             .to_numpy()
         )
-        _log_block_timing("lr_slice_copy", block_start_time)
-
-        block_start_time = time.perf_counter()
         vol20 = vol.rolling(20).mean().replace(0.0, np.nan)
         spread = (high - low) / (close + 1e-8)
         spread_mean20 = spread.rolling(20).mean().replace(0.0, np.nan)
@@ -442,16 +403,11 @@ class KrakenBacktestEnv(gym.Env):
         imbalance = (((close - low) / ((high - low) + 1e-8)) * 2.0) - 1.0
         self.df["bid_ask_imbalance"] = imbalance.clip(-1.0, 1.0).fillna(0.0)
         self.df["price_dist_best_bid"] = ((close - low) / (close + 1e-8)).clip(-1.0, 1.0).fillna(0.0)
-        _log_block_timing("order_book_features", block_start_time)
-
-        block_start_time = time.perf_counter()
         self.df["eth_return_1"] = close.pct_change(1).fillna(0.0)
         self.df["eth_return_4"] = close.pct_change(4).fillna(0.0)
         self.df["eth_return_16"] = close.pct_change(16).fillna(0.0)
-        _log_block_timing("eth_returns", block_start_time)
 
         if self.btc_available and self.btc_df is not None:
-            btc_merge_start_time = time.perf_counter()
             btc_features = self.btc_df[["ts", *self.btc_feature_cols]]
             self.df = pd.merge_asof(
                 self.df.sort_values("ts"),
@@ -460,8 +416,6 @@ class KrakenBacktestEnv(gym.Env):
                 direction="backward",
             ).sort_index()
             self.df[self.btc_feature_cols] = self.df[self.btc_feature_cols].fillna(0.0)
-            btc_merge_duration_seconds = time.perf_counter() - btc_merge_start_time
-            print(f"[KrakenBacktestEnv] BTC per-episode merge completed in {btc_merge_duration_seconds:.2f}s")
         else:
             for col in self.btc_feature_cols:
                 self.df[col] = 0.0
