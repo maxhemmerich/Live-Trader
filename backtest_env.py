@@ -244,26 +244,33 @@ class KrakenBacktestEnv(gym.Env):
             lower.iloc[idx] = reg_now - (2.0 * resid_std)
         return mid, upper, lower
 
-    def _precompute_btc_indicators(self) -> None:
-        if not self.btc_available or self.btc_df is None:
-            return
-
-        btc_close = self.btc_df["close"].astype(np.float64)
-        self.btc_df["btc_return_1"] = btc_close.pct_change(1).fillna(0.0)
-        self.btc_df["btc_return_4"] = btc_close.pct_change(4).fillna(0.0)
-        self.btc_df["btc_return_16"] = btc_close.pct_change(16).fillna(0.0)
-        btc_ema20 = EMAIndicator(close=btc_close, window=20).ema_indicator()
-        self.btc_df["btc_ema20_dev"] = ((btc_close / (btc_ema20 + 1e-8)) - 1.0).fillna(0.0)
-        btc_rsi14 = RSIIndicator(close=btc_close, window=14).rsi()
-        self.btc_df["btc_rsi14_norm"] = ((btc_rsi14 - 50.0) / 50.0).fillna(0.0)
-
-        btc_mid, btc_upper, _ = self._rolling_lr_channel(btc_close, 60)
-        self.btc_df["btc_lr60_mid"] = ((btc_mid - btc_close) / (btc_close + 1e-8)).fillna(0.0)
-        self.btc_df["btc_lr60_upper"] = ((btc_upper - btc_close) / (btc_close + 1e-8)).fillna(0.0)
-
     def _precompute_indicators(self) -> None:
         if self.df.empty:
             return
+
+        btc_feature_cols = [
+            "btc_return_1",
+            "btc_return_4",
+            "btc_return_16",
+            "btc_ema20_dev",
+            "btc_rsi14_norm",
+            "btc_lr60_mid",
+            "btc_lr60_upper",
+        ]
+
+        if self.btc_available and self.btc_df is not None:
+            btc_close = self.btc_df["close"].astype(np.float64)
+            self.btc_df["btc_return_1"] = btc_close.pct_change(1).fillna(0.0)
+            self.btc_df["btc_return_4"] = btc_close.pct_change(4).fillna(0.0)
+            self.btc_df["btc_return_16"] = btc_close.pct_change(16).fillna(0.0)
+            btc_ema20 = EMAIndicator(close=btc_close, window=20).ema_indicator()
+            self.btc_df["btc_ema20_dev"] = ((btc_close / (btc_ema20 + 1e-8)) - 1.0).fillna(0.0)
+            btc_rsi14 = RSIIndicator(close=btc_close, window=14).rsi()
+            self.btc_df["btc_rsi14_norm"] = ((btc_rsi14 - 50.0) / 50.0).fillna(0.0)
+
+            btc_mid, btc_upper, _ = self._rolling_lr_channel(btc_close, 60)
+            self.btc_df["btc_lr60_mid"] = ((btc_mid - btc_close) / (btc_close + 1e-8)).fillna(0.0)
+            self.btc_df["btc_lr60_upper"] = ((btc_upper - btc_close) / (btc_close + 1e-8)).fillna(0.0)
 
         close = self.df["close"]
         vol = self.df["vol"]
@@ -329,16 +336,6 @@ class KrakenBacktestEnv(gym.Env):
         self.df["eth_return_1"] = close.pct_change(1).fillna(0.0)
         self.df["eth_return_4"] = close.pct_change(4).fillna(0.0)
         self.df["eth_return_16"] = close.pct_change(16).fillna(0.0)
-
-        btc_feature_cols = [
-            "btc_return_1",
-            "btc_return_4",
-            "btc_return_16",
-            "btc_ema20_dev",
-            "btc_rsi14_norm",
-            "btc_lr60_mid",
-            "btc_lr60_upper",
-        ]
 
         if self.btc_available and self.btc_df is not None:
             btc_features = self.btc_df[["ts", *btc_feature_cols]].sort_values("ts")
@@ -479,7 +476,6 @@ class KrakenBacktestEnv(gym.Env):
         self.current_pos = start_idx - self.window_start_idx
         precompute_start_time = time.perf_counter()
         self._precompute_indicators()
-        self._precompute_btc_indicators()
         precompute_duration_seconds = time.perf_counter() - precompute_start_time
         print(f"[KrakenBacktestEnv] Precompute completed in {precompute_duration_seconds:.2f}s")
 
