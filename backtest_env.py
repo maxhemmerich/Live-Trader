@@ -16,47 +16,37 @@ from ta.trend import CCIIndicator, EMAIndicator, MACD
 from ta.volatility import AverageTrueRange, BollingerBands
 from ta.volume import OnBalanceVolumeIndicator
 
-def _fast_lr_channel(close_arr: np.ndarray, window: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _fast_lr_channel(close_arr, w):
     n = len(close_arr)
-    result_mid = np.full(n, np.nan, dtype=np.float64)
-    result_upper = np.full(n, np.nan, dtype=np.float64)
-    result_lower = np.full(n, np.nan, dtype=np.float64)
-    if window <= 1 or n < window:
-        return result_mid, result_upper, result_lower
-
-    x = np.arange(window, dtype=np.float64)
+    x = np.arange(w, dtype=np.float64)
     x_mean = x.mean()
     ss_xx = ((x - x_mean) ** 2).sum()
-    windows = np.lib.stride_tricks.sliding_window_view(close_arr, window)
-
-    y_means = windows.mean(axis=1)
-    ss_xy = ((windows - y_means[:, None]) * (x - x_mean)).sum(axis=1)
-    slopes = ss_xy / (ss_xx + 1e-12)
-    intercepts = y_means - (slopes * x_mean)
-    predicted_last = (slopes * (window - 1)) + intercepts
-
     x_norm = x - x_mean
-    if window > 5000:
-        stds = np.full(len(windows), np.nan, dtype=np.float64)
-        for i in range(0, len(windows), 1000):
-            chunk = windows[i : i + 1000]
-            chunk_y_means = chunk.mean(axis=1)
-            chunk_ss_xy = ((chunk - chunk_y_means[:, None]) * x_norm).sum(axis=1)
-            chunk_slopes = chunk_ss_xy / (ss_xx + 1e-12)
-            chunk_centered = chunk - chunk_y_means[:, None]
-            chunk_residuals = chunk_centered - chunk_slopes[:, None] * x_norm
-            stds[i : i + 1000] = chunk_residuals.std(axis=1)
-    else:
-        y_centered = windows - y_means[:, None]
-        residuals = y_centered - slopes[:, None] * x_norm
-        stds = residuals.std(axis=1)
 
-    close_now = close_arr[window - 1 :]
-    denom = close_now + 1e-8
-    result_mid[window - 1 :] = (predicted_last - close_now) / denom
-    result_upper[window - 1 :] = (predicted_last + (2.0 * stds) - close_now) / denom
-    result_lower[window - 1 :] = (predicted_last - (2.0 * stds) - close_now) / denom
-    return result_mid, result_upper, result_lower
+    m = n - w + 1  # number of windows
+    predicted_last = np.empty(m)
+    stds = np.empty(m)
+
+    chunk_size = 500
+    for i in range(0, m, chunk_size):
+        chunk = np.lib.stride_tricks.sliding_window_view(close_arr[i:i+chunk_size+w-1], w)
+        if len(chunk) == 0:
+            continue
+        y_means = chunk.mean(axis=1)
+        ss_xy = ((chunk - y_means[:,None]) * x_norm).sum(axis=1)
+        slopes = ss_xy / ss_xx
+        intercepts = y_means - slopes * x_mean
+        predicted_last[i:i+len(chunk)] = slopes * (w-1) + intercepts
+        residuals = (chunk - y_means[:,None]) - slopes[:,None] * x_norm
+        stds[i:i+len(chunk)] = residuals.std(axis=1)
+
+    mid = np.full(n, np.nan)
+    upper = np.full(n, np.nan)
+    lower = np.full(n, np.nan)
+    mid[w-1:] = (predicted_last - close_arr[w-1:]) / close_arr[w-1:]
+    upper[w-1:] = (predicted_last + 2*stds - close_arr[w-1:]) / close_arr[w-1:]
+    lower[w-1:] = (predicted_last - 2*stds - close_arr[w-1:]) / close_arr[w-1:]
+    return mid, upper, lower
 
 from env import (
     FEATURE_COLUMNS,
