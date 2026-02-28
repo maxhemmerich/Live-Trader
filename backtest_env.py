@@ -27,7 +27,7 @@ def _fast_lr_channel(close_arr, w):
     predicted_last = np.empty(m)
     stds = np.empty(m)
 
-    chunk_size = 2000
+    chunk_size = max(1, int(100_000_000 / (w * 8)))
     for i in range(0, m, chunk_size):
         chunk = np.lib.stride_tricks.sliding_window_view(close_arr[i:i+chunk_size+w-1], w)
         if len(chunk) == 0:
