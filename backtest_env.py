@@ -25,8 +25,8 @@ def _fast_lr_channel(close_arr: np.ndarray, window: int) -> tuple[np.ndarray, np
         return result_mid, result_upper, result_lower
 
     x = np.arange(window, dtype=np.float64)
-    x_mean = (window - 1) / 2.0
-    ss_xx = (window * (window - 1) * (2 * window - 1) / 6.0) - (window * (x_mean**2))
+    x_mean = x.mean()
+    ss_xx = ((x - x_mean) ** 2).sum()
     windows = np.lib.stride_tricks.sliding_window_view(close_arr, window)
 
     y_means = windows.mean(axis=1)
@@ -35,9 +35,21 @@ def _fast_lr_channel(close_arr: np.ndarray, window: int) -> tuple[np.ndarray, np
     intercepts = y_means - (slopes * x_mean)
     predicted_last = (slopes * (window - 1)) + intercepts
 
-    fitted = (slopes[:, None] * x) + intercepts[:, None]
-    residuals = windows - fitted
-    stds = residuals.std(axis=1)
+    x_norm = x - x_mean
+    if window > 5000:
+        stds = np.full(len(windows), np.nan, dtype=np.float64)
+        for i in range(0, len(windows), 1000):
+            chunk = windows[i : i + 1000]
+            chunk_y_means = chunk.mean(axis=1)
+            chunk_ss_xy = ((chunk - chunk_y_means[:, None]) * x_norm).sum(axis=1)
+            chunk_slopes = chunk_ss_xy / (ss_xx + 1e-12)
+            chunk_centered = chunk - chunk_y_means[:, None]
+            chunk_residuals = chunk_centered - chunk_slopes[:, None] * x_norm
+            stds[i : i + 1000] = chunk_residuals.std(axis=1)
+    else:
+        y_centered = windows - y_means[:, None]
+        residuals = y_centered - slopes[:, None] * x_norm
+        stds = residuals.std(axis=1)
 
     close_now = close_arr[window - 1 :]
     denom = close_now + 1e-8
