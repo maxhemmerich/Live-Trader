@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+import csv
 from typing import Any
 
 import numpy as np
@@ -78,9 +79,10 @@ def _evaluate_pretrained_model(model: SAC, num_episodes: int = 20) -> str:
 class BacktestProgressCallback(BaseCallback):
     """Print summary statistics every N steps during pretraining."""
 
-    def __init__(self, print_every: int = 10_000) -> None:
+    def __init__(self, print_every: int = 10_000, log_path: str = "pretrain_log.csv") -> None:
         super().__init__()
         self.print_every = int(print_every)
+        self.log_path = log_path
         self.start_time = 0.0
         self.episode_count = 0
         self.completed_episode_rewards: list[float] = []
@@ -89,6 +91,12 @@ class BacktestProgressCallback(BaseCallback):
 
     def _on_training_start(self) -> None:
         self.start_time = time.perf_counter()
+        log_exists = os.path.exists(self.log_path)
+        should_write_header = (not log_exists) or os.path.getsize(self.log_path) == 0
+        if should_write_header:
+            with open(self.log_path, "a", newline="", encoding="utf-8") as csv_file:
+                writer = csv.writer(csv_file)
+                writer.writerow(["steps_completed", "time_elapsed", "mean_reward"])
 
     def _on_step(self) -> bool:
         reward = float(self.locals["rewards"][0])
@@ -111,6 +119,15 @@ class BacktestProgressCallback(BaseCallback):
                 if self.completed_episode_rewards
                 else 0.0
             )
+
+            with open(self.log_path, "a", newline="", encoding="utf-8") as csv_file:
+                writer = csv.writer(csv_file)
+                writer.writerow([
+                    int(self.num_timesteps),
+                    round(elapsed_seconds, 3),
+                    round(mean_reward, 6),
+                ])
+
             print(
                 f"[pretrain] steps_completed={self.num_timesteps} "
                 f"time_elapsed={elapsed_seconds:.1f}s "
