@@ -56,6 +56,8 @@ from env import (
     SHAPE_BONUS,
     TREND_LAG_VALUES,
     TREND_PREFIXES,
+    N_STEP_GAMMA,
+    N_STEP_RETURN,
 )
 
 
@@ -220,6 +222,7 @@ class KrakenBacktestEnv(gym.Env):
         self.starting_portfolio_usd = 0.0
         self.last_balance = 0.0
         self.last_obs = np.zeros((OBSERVATION_SIZE,), dtype=np.float32)
+        self.reward_buffer: list[float] = []
 
     def _validate_data_requirements(self) -> None:
         min_start_idx = self.max_buffer_rows - 1
@@ -237,6 +240,23 @@ class KrakenBacktestEnv(gym.Env):
 
     def _get_portfolio_value(self, eth_balance: float, usd_balance: float, price: float) -> float:
         return float((eth_balance * price) + usd_balance)
+
+    def _discounted_buffer_sum(self) -> float:
+        return float(sum(r * (N_STEP_GAMMA**i) for i, r in enumerate(self.reward_buffer)))
+
+    def _compute_n_step_reward(self, reward: float, terminated: bool) -> float:
+        self.reward_buffer.append(float(reward))
+
+        n_step_reward = 0.0
+        if len(self.reward_buffer) >= N_STEP_RETURN:
+            n_step_reward = self._discounted_buffer_sum()
+            self.reward_buffer.pop(0)
+
+        if terminated and self.reward_buffer:
+            n_step_reward += self._discounted_buffer_sum()
+            self.reward_buffer.clear()
+
+        return float(n_step_reward)
 
     def _lag_price_vol(self, n: int, close_now: float, vol_now: float) -> tuple[float, float]:
         if self.current_pos < n:
@@ -517,6 +537,7 @@ class KrakenBacktestEnv(gym.Env):
         self.btc_prices.clear()
         self.btc_prices_rsi.clear()
         self.btc_prices_lr.clear()
+        self.reward_buffer.clear()
 
         current_price = float(self.df.iloc[self.current_pos]["close"])
         self.starting_portfolio_usd = self._get_portfolio_value(self.eth_balance, self.usd_balance, current_price)
@@ -612,13 +633,15 @@ class KrakenBacktestEnv(gym.Env):
             portfolio_usd < 0.5 * self.starting_portfolio_usd
         )
 
+        returned_reward = self._compute_n_step_reward(scaled_reward, terminated)
+
         info = {
             "action_taken": self.last_action,
             "portfolio_usd": portfolio_usd,
             "fill_price": filled_price,
             "eth_allocation": (self.eth_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0,
         }
-        return obs, float(scaled_reward), terminated, False, info
+        return obs, returned_reward, terminated, False, info
 
 
 # Import consistency checks requested for feature contracts.

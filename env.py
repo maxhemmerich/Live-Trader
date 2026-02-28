@@ -26,6 +26,8 @@ from ta.volume import OnBalanceVolumeIndicator
 BASE_OHLCV_COLUMNS = ["ts", "open", "high", "low", "close", "vol"]
 SHAPE_BONUS = 0.0001
 MAKER_FEE = 0.0016
+N_STEP_RETURN = 20
+N_STEP_GAMMA = 0.99
 LAG_VALUES = [
     1,
     2,
@@ -198,6 +200,7 @@ class KrakenLiveEnv(gym.Env):
         self.last_obs = np.zeros((OBSERVATION_SIZE,), dtype=np.float32)
         self.step_count = 0
         self.cumulative_reward = 0.0
+        self.reward_buffer: list[float] = []
         self.starting_portfolio_usd: Optional[float] = None
         self.last_balance = 0.0
 
@@ -741,6 +744,23 @@ class KrakenLiveEnv(gym.Env):
         match = re.search(r"sac_step_(\d+)_\d{8}_\d{6}\.zip$", os.path.basename(path))
         return int(match.group(1)) if match else -1
 
+    def _discounted_buffer_sum(self) -> float:
+        return float(sum(r * (N_STEP_GAMMA**i) for i, r in enumerate(self.reward_buffer)))
+
+    def _compute_n_step_reward(self, reward: float, terminated: bool) -> float:
+        self.reward_buffer.append(float(reward))
+
+        n_step_reward = 0.0
+        if len(self.reward_buffer) >= N_STEP_RETURN:
+            n_step_reward = self._discounted_buffer_sum()
+            self.reward_buffer.pop(0)
+
+        if terminated and self.reward_buffer:
+            n_step_reward += self._discounted_buffer_sum()
+            self.reward_buffer.clear()
+
+        return float(n_step_reward)
+
     def get_latest_checkpoint(self) -> Optional[str]:
         checkpoints = glob.glob(os.path.join(self.checkpoint_dir, "sac_step_*.zip"))
         if not checkpoints:
@@ -766,6 +786,7 @@ class KrakenLiveEnv(gym.Env):
         self.last_balance = total_usd
         self.starting_portfolio_usd = total_usd
         self.cumulative_reward = 0.0
+        self.reward_buffer.clear()
         self.step_count = 0
         self.last_action = "hold"
         self.last_filled_trade_step = 0
@@ -907,7 +928,9 @@ class KrakenLiveEnv(gym.Env):
 
         self._append_log_row(action_raw, float(reward), current_price, portfolio_usd, eth_balance, usd_balance, obs)
 
-        return obs, float(scaled_reward), terminated, False, {
+        returned_reward = self._compute_n_step_reward(scaled_reward, terminated)
+
+        return obs, returned_reward, terminated, False, {
             "action_taken": self.last_action,
             "portfolio_usd": portfolio_usd,
             "kill_switch": self.kill_switch,
