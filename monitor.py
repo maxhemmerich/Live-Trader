@@ -31,6 +31,7 @@ st.set_page_config(
 
 LOG_CSV      = "trading_log.csv"
 SAC_LOG_CSV  = "sac_log.csv"
+PRETRAIN_LOG_CSV = "pretrain_log.csv"
 
 # ── Sidebar controls ───────────────────────────────────────────────────────
 st.sidebar.title("Dashboard Controls")
@@ -44,6 +45,7 @@ refresh_interval = st.sidebar.slider(
 st.sidebar.markdown("---")
 st.sidebar.caption(f"Log file: `{LOG_CSV}`")
 st.sidebar.caption(f"SAC log file: `{SAC_LOG_CSV}`")
+st.sidebar.caption(f"Pretrain log file: `{PRETRAIN_LOG_CSV}`")
 
 # ── Auto-refresh ───────────────────────────────────────────────────────────
 refresh_count = st_autorefresh(
@@ -82,14 +84,95 @@ def load_sac_log(path: str) -> pd.DataFrame | None:
         return None
 
 
+@st.cache_data(ttl=refresh_interval)
+def load_pretrain_log(path: str) -> pd.DataFrame | None:
+    """Load pretraining progress log if present."""
+    if not os.path.exists(path):
+        return None
+    try:
+        df = pd.read_csv(path)
+        for col in ["steps_completed", "time_elapsed", "mean_reward"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        return df.dropna(subset=["steps_completed", "time_elapsed", "mean_reward"])
+    except Exception as e:
+        st.warning(f"Failed to load pretraining log: {e}", icon="⚠️")
+        return None
+
+
 df = load_log(LOG_CSV)
 sac_df = load_sac_log(SAC_LOG_CSV)
+pretrain_df = load_pretrain_log(PRETRAIN_LOG_CSV)
 
-if df is None or df.empty:
+trading_log_exists = os.path.exists(LOG_CSV)
+pretrain_log_exists = os.path.exists(PRETRAIN_LOG_CSV)
+
+show_pretrain_section = pretrain_log_exists
+show_live_section = trading_log_exists
+
+if not show_pretrain_section and not show_live_section:
     st.warning(
-        f"No data found. Run `python train.py` first to generate `{LOG_CSV}`.",
+        f"No data found. Run `python pretrain.py` to generate `{PRETRAIN_LOG_CSV}` or `python train.py` to generate `{LOG_CSV}`.",
         icon="⚠️",
     )
+    st.stop()
+
+if show_pretrain_section:
+    if show_live_section:
+        st.header("Pretraining")
+    else:
+        st.subheader("Pretraining")
+
+    if pretrain_df is None or pretrain_df.empty:
+        st.warning(f"`{PRETRAIN_LOG_CSV}` exists but no readable rows were found.", icon="⚠️")
+    else:
+        pretrain_plot = pretrain_df.sort_values("steps_completed").copy()
+        latest_pretrain = pretrain_plot.iloc[-1]
+        completed_steps = int(latest_pretrain["steps_completed"])
+        elapsed_seconds = float(latest_pretrain["time_elapsed"])
+
+        steps_per_second = (completed_steps / elapsed_seconds) if elapsed_seconds > 0 else 0.0
+        total_pretrain_steps = 1_000_000
+        steps_remaining = max(total_pretrain_steps - completed_steps, 0)
+        estimated_remaining = (steps_remaining / steps_per_second) if steps_per_second > 0 else float("inf")
+
+        pretrain_col1, pretrain_col2, pretrain_col3 = st.columns(3)
+        pretrain_col1.metric("Steps Completed", f"{completed_steps:,}")
+        pretrain_col2.metric("Time Elapsed", f"{elapsed_seconds:,.1f}s")
+        if np.isfinite(estimated_remaining):
+            pretrain_col3.metric("Estimated Time Remaining", f"{estimated_remaining:,.1f}s")
+        else:
+            pretrain_col3.metric("Estimated Time Remaining", "N/A")
+
+        progress_value = min(max(completed_steps / total_pretrain_steps, 0.0), 1.0)
+        st.progress(progress_value, text=f"Pretraining progress: {progress_value * 100:.2f}%")
+
+        pretrain_fig = px.line(
+            pretrain_plot,
+            x="steps_completed",
+            y="mean_reward",
+            title="Pretraining Mean Reward Over Steps",
+        )
+        pretrain_fig.update_xaxes(title_text="Steps Completed")
+        pretrain_fig.update_yaxes(title_text="Mean Reward")
+        st.plotly_chart(pretrain_fig, width="stretch")
+
+if show_live_section and show_pretrain_section:
+    st.markdown("---")
+
+if show_live_section and not show_pretrain_section:
+    st.subheader("Live Trading")
+elif show_live_section and show_pretrain_section:
+    st.header("Live Trading")
+
+if show_live_section and (df is None or df.empty):
+    st.warning(
+        f"`{LOG_CSV}` exists but no readable rows were found.",
+        icon="⚠️",
+    )
+    st.stop()
+
+if not show_live_section:
     st.stop()
 
 # ── KPI metrics ────────────────────────────────────────────────────────────
