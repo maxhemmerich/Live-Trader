@@ -134,13 +134,18 @@ if show_pretrain_section:
         steps_per_second = (completed_steps / elapsed_seconds) if elapsed_seconds > 0 else 0.0
         total_pretrain_steps = 1_000_000
         steps_remaining = max(total_pretrain_steps - completed_steps, 0)
-        estimated_remaining = (steps_remaining / steps_per_second) if steps_per_second > 0 else float("inf")
+        estimated_remaining_seconds = (steps_remaining / steps_per_second) if steps_per_second > 0 else float("inf")
 
         pretrain_col1, pretrain_col2, pretrain_col3 = st.columns(3)
         pretrain_col1.metric("Steps Completed", f"{completed_steps:,}")
         pretrain_col2.metric("Time Elapsed", f"{elapsed_seconds:,.1f}s")
-        if np.isfinite(estimated_remaining):
-            pretrain_col3.metric("Estimated Time Remaining", f"{estimated_remaining:,.1f}s")
+        if np.isfinite(estimated_remaining_seconds):
+            remaining_s = int(estimated_remaining_seconds)
+            hours = remaining_s // 3600
+            minutes = (remaining_s % 3600) // 60
+            seconds = remaining_s % 60
+            time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            pretrain_col3.metric("Estimated Time Remaining", time_str)
         else:
             pretrain_col3.metric("Estimated Time Remaining", "N/A")
 
