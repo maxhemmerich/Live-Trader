@@ -17,6 +17,9 @@ from ta.volatility import AverageTrueRange, BollingerBands
 from ta.volume import OnBalanceVolumeIndicator
 
 def _fast_lr_channel(close_arr, w):
+    if w > 2000:
+        return _lr_channel_large_window(close_arr, w)
+
     n = len(close_arr)
     x = np.arange(w, dtype=np.float64)
     x_mean = x.mean()
@@ -46,6 +49,41 @@ def _fast_lr_channel(close_arr, w):
     mid[w-1:] = (predicted_last - close_arr[w-1:]) / close_arr[w-1:]
     upper[w-1:] = (predicted_last + 2*stds - close_arr[w-1:]) / close_arr[w-1:]
     lower[w-1:] = (predicted_last - 2*stds - close_arr[w-1:]) / close_arr[w-1:]
+    return mid, upper, lower
+
+
+def _lr_channel_large_window(close_arr, w):
+    n = len(close_arr)
+
+    x = np.arange(w, dtype=np.float64)
+    x_mean = (w - 1) / 2.0
+    ss_xx = w * (w - 1) * (2 * w - 1) / 6 - w * x_mean**2
+    weights = x - x_mean
+
+    cs_y = np.concatenate([[0], np.cumsum(close_arr)])
+    sum_y = cs_y[w:] - cs_y[:-w]
+    y_means = sum_y / w
+
+    ss_xy = np.convolve(close_arr, weights[::-1], mode="valid")
+
+    slopes = ss_xy / ss_xx
+    intercepts = y_means - slopes * x_mean
+    predicted_last = slopes * (w - 1) + intercepts
+
+    cs_y2 = np.concatenate([[0], np.cumsum(close_arr**2)])
+    sum_y2 = cs_y2[w:] - cs_y2[:-w]
+    ss_yy = sum_y2 - w * y_means**2
+
+    ss_residuals = ss_yy - ss_xy**2 / ss_xx
+    ss_residuals = np.maximum(ss_residuals, 0)
+    stds = np.sqrt(ss_residuals / w)
+
+    mid = np.full(n, np.nan)
+    upper = np.full(n, np.nan)
+    lower = np.full(n, np.nan)
+    mid[w-1:] = (predicted_last - close_arr[w-1:]) / close_arr[w-1:]
+    upper[w-1:] = (predicted_last + 2 * stds - close_arr[w-1:]) / close_arr[w-1:]
+    lower[w-1:] = (predicted_last - 2 * stds - close_arr[w-1:]) / close_arr[w-1:]
     return mid, upper, lower
 
 from env import (
