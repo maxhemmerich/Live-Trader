@@ -27,7 +27,7 @@ def _fast_lr_channel(close_arr, w):
     predicted_last = np.empty(m)
     stds = np.empty(m)
 
-    chunk_size = 500
+    chunk_size = 2000
     for i in range(0, m, chunk_size):
         chunk = np.lib.stride_tricks.sliding_window_view(close_arr[i:i+chunk_size+w-1], w)
         if len(chunk) == 0:
@@ -366,7 +366,13 @@ class KrakenBacktestEnv(gym.Env):
 
         close_np = close.to_numpy(dtype=np.float64)
         for lr_window in [60, 1440, 10080, 40000]:
+            lr_channel_start = time.perf_counter()
             lr_mid, lr_upper, lr_lower = _fast_lr_channel(close_np, lr_window)
+            lr_channel_duration_seconds = time.perf_counter() - lr_channel_start
+            print(
+                f"[KrakenBacktestEnv] LR channel window {lr_window} "
+                f"computed in {lr_channel_duration_seconds:.2f}s"
+            )
             self.df[f"lr{lr_window}_mid"] = np.nan_to_num(lr_mid, nan=0.0)
             self.df[f"lr{lr_window}_upper"] = np.nan_to_num(lr_upper, nan=0.0)
             self.df[f"lr{lr_window}_lower"] = np.nan_to_num(lr_lower, nan=0.0)
