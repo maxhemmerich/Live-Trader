@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import time
 import csv
+import subprocess
+import sys
 from typing import Any
 
 import numpy as np
@@ -165,6 +167,55 @@ class RotatingCheckpointCallback(CheckpointCallback):
         return continue_training
 
 
+class PlateauStopCallback(BaseCallback):
+    """Stop pretraining when episodic rewards flatten after a warmup period."""
+
+    def __init__(self, min_steps: int = 200_000, recent_episodes: int = 5) -> None:
+        super().__init__()
+        self.min_steps = int(min_steps)
+        self.recent_episodes = int(recent_episodes)
+        self.completed_episode_rewards: list[float] = []
+        self.running_episode_reward = 0.0
+        self.stopped_by_plateau = False
+        self.stop_reason = ""
+
+    def _on_step(self) -> bool:
+        reward = float(self.locals["rewards"][0])
+        done = bool(self.locals["dones"][0])
+        self.running_episode_reward += reward
+
+        if not done:
+            return True
+
+        self.completed_episode_rewards.append(self.running_episode_reward)
+        self.running_episode_reward = 0.0
+
+        if len(self.completed_episode_rewards) < (self.recent_episodes * 2):
+            return True
+        if self.num_timesteps <= self.min_steps:
+            return True
+
+        previous_window = self.completed_episode_rewards[-(self.recent_episodes * 2):-self.recent_episodes]
+        recent_window = self.completed_episode_rewards[-self.recent_episodes:]
+
+        previous_mean = float(np.mean(previous_window))
+        recent_mean = float(np.mean(recent_window))
+        improvement = recent_mean - previous_mean
+        plateau_threshold = 0.01 * max(abs(recent_mean), 1e-8)
+
+        if improvement < plateau_threshold:
+            self.stopped_by_plateau = True
+            self.stop_reason = (
+                f"plateau detected (improvement={improvement:+.6f}, "
+                f"threshold={plateau_threshold:.6f}, "
+                f"recent_mean={recent_mean:+.6f})"
+            )
+            print(f"[pretrain] Stopping early: {self.stop_reason}")
+            return False
+
+        return True
+
+
 def main() -> None:
     env = DummyVecEnv([
         lambda: KrakenBacktestEnv(
@@ -185,6 +236,7 @@ def main() -> None:
         learning_starts=200,
     )
 
+    plateau_callback = PlateauStopCallback(min_steps=200_000, recent_episodes=5)
     callback = CallbackList([
         BacktestProgressCallback(print_every=1_000),
         RotatingCheckpointCallback(
@@ -193,8 +245,15 @@ def main() -> None:
             name_prefix="pretrain_checkpoint",
             max_checkpoints=3,
         ),
+        plateau_callback,
     ])
-    model.learn(total_timesteps=1_000_000, callback=callback)
+    max_timesteps = 1_000_000
+    model.learn(total_timesteps=max_timesteps, callback=callback)
+
+    if plateau_callback.stopped_by_plateau:
+        print(f"[pretrain] Stop reason: {plateau_callback.stop_reason}")
+    else:
+        print(f"[pretrain] Stop reason: max steps reached ({max_timesteps})")
 
     os.makedirs("./checkpoints", exist_ok=True)
     model.save("./checkpoints/pretrained_sac.zip")
@@ -203,6 +262,9 @@ def main() -> None:
     print(evaluation_summary)
     with open("./checkpoints/pretrain_stats.txt", "w", encoding="utf-8") as stats_file:
         stats_file.write(evaluation_summary + "\n")
+
+    print('[pretrain] Launching train.py...')
+    subprocess.Popen([sys.executable, 'train.py'])
 
 
 if __name__ == "__main__":
