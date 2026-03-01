@@ -158,9 +158,23 @@ class KrakenBacktestEnv(gym.Env):
         self.full_df["ts"] = self.full_df["ts"] * 1000
         total_rows_loaded = len(self.full_df)
         load_duration_seconds = time.perf_counter() - load_start_time
+        two_years_ms = int(2 * 365 * 24 * 60 * 60 * 1000)
+        max_ts = int(self.full_df["ts"].max())
+        self.sample_cutoff_ts = max_ts - two_years_ms
+        self.sample_start_idx = int(self.full_df["ts"].searchsorted(self.sample_cutoff_ts, side="left"))
+        self.sample_start_date = pd.to_datetime(self.sample_cutoff_ts, unit="ms", utc=True)
+        sampling_start_idx = max(self.max_buffer_rows - 1, self.sample_start_idx)
+        sampling_max_idx = len(self.full_df) - self.episode_length - 1
+        sampling_rows = max(0, sampling_max_idx - sampling_start_idx + 1)
         print(
             f"[KrakenBacktestEnv] Completed load: {total_rows_loaded:,} rows "
             f"in {load_duration_seconds:.2f}s"
+        )
+        print(
+            "[KrakenBacktestEnv] Data zones: "
+            f"total_rows={total_rows_loaded:,}, "
+            f"2y_cutoff={self.sample_start_date.isoformat()}, "
+            f"episode_sampling_rows={sampling_rows:,}"
         )
 
         btc_csv_path = "D:/BTCUSD_1.csv"
@@ -265,12 +279,13 @@ class KrakenBacktestEnv(gym.Env):
         self.reward_buffer: list[float] = []
 
     def _validate_data_requirements(self) -> None:
-        min_start_idx = self.max_buffer_rows - 1
+        min_start_idx = max(self.max_buffer_rows - 1, self.sample_start_idx)
         max_start_idx = len(self.full_df) - self.episode_length - 1
         if max_start_idx < min_start_idx:
             raise ValueError(
-                "CSV does not have enough rows for 40k warmup plus episode_length. "
-                f"rows={len(self.full_df)}, required>={self.max_buffer_rows + self.episode_length + 1}"
+                "CSV does not have enough rows in the 2-year sample zone for 40k warmup plus episode_length. "
+                f"rows={len(self.full_df)}, sample_start_idx={self.sample_start_idx}, "
+                f"required_start_idx<={max_start_idx}"
             )
 
         if self.start_idx is not None and not (min_start_idx <= self.start_idx <= max_start_idx):
@@ -553,7 +568,7 @@ class KrakenBacktestEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
-        min_start_idx = self.max_buffer_rows - 1
+        min_start_idx = max(self.max_buffer_rows - 1, self.sample_start_idx)
         max_start_idx = len(self.full_df) - self.episode_length - 1
 
         if self.start_idx is not None:
