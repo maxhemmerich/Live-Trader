@@ -364,6 +364,53 @@ fig1 = px.line(df_plot, x="global_step", y="portfolio_usd", title="Portfolio Val
 fig1.update_layout(yaxis=dict(range=[df["portfolio_usd"].min(), df["portfolio_usd"].max()]))
 st.plotly_chart(fig1, width="stretch")
 
+df_plot["portfolio_pct_change"] = (
+    (df_plot["portfolio_usd"] / df_plot["portfolio_usd"].iloc[0]) - 1
+) * 100.0
+df_plot["eth_buy_hold_pct_change"] = (
+    (df_plot["eth_price"] / df_plot["eth_price"].iloc[0]) - 1
+) * 100.0
+
+bot_pct_change = float(df_plot["portfolio_pct_change"].iloc[-1])
+buy_hold_pct_change = float(df_plot["eth_buy_hold_pct_change"].iloc[-1])
+alpha_pct_change = bot_pct_change - buy_hold_pct_change
+
+fig_pct = go.Figure()
+fig_pct.add_trace(
+    go.Scatter(
+        x=df_plot["global_step"],
+        y=df_plot["portfolio_pct_change"],
+        name="Portfolio % change",
+        line=dict(color="#2ca02c", width=2),
+    )
+)
+fig_pct.add_trace(
+    go.Scatter(
+        x=df_plot["global_step"],
+        y=df_plot["eth_buy_hold_pct_change"],
+        name="ETH buy & hold % change",
+        line=dict(color="#1f77b4", width=2),
+    )
+)
+fig_pct.add_hline(y=0, line_width=1, line_dash="dash", line_color="gray")
+fig_pct.update_layout(title="Portfolio vs ETH Buy & Hold (% Change)")
+fig_pct.update_xaxes(title_text="global_step")
+fig_pct.update_yaxes(title_text="% Change")
+fig_pct.add_annotation(
+    xref="paper",
+    yref="paper",
+    x=0.01,
+    y=0.99,
+    showarrow=False,
+    align="left",
+    bgcolor="rgba(255,255,255,0.7)",
+    text=(
+        f"Bot: {bot_pct_change:+.1f}% vs Buy & Hold: {buy_hold_pct_change:+.1f}% "
+        f"= {alpha_pct_change:+.1f}% alpha"
+    ),
+)
+st.plotly_chart(fig_pct, width="stretch")
+
 fig2 = make_subplots(specs=[[{"secondary_y": True}]])
 fig2.add_trace(
     go.Scatter(
