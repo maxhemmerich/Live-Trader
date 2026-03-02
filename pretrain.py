@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import os
-import time
 import csv
+import os
+import shutil
 import subprocess
 import sys
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -76,6 +78,34 @@ def _evaluate_pretrained_model(model: SAC, num_episodes: int = 20) -> str:
         f"worst episode: {worst_ret:.6f}\n"
         f"approximate Sharpe ratio: {sharpe:.6f}"
     )
+
+
+def _save_and_verify_pretrained_model(model: SAC, checkpoint_dir: str = "./checkpoints") -> str:
+    """Persist pretrained model with verification and timestamped backup copy."""
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    canonical_path = os.path.abspath(os.path.join(checkpoint_dir, "pretrained_sac.zip"))
+
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            model.save(canonical_path)
+            if not os.path.exists(canonical_path) or os.path.getsize(canonical_path) <= 0:
+                raise RuntimeError("saved file missing or empty")
+            _ = SAC.load(canonical_path, env=None)
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            backup_path = os.path.abspath(
+                os.path.join(checkpoint_dir, f"pretrained_sac_{timestamp}.zip")
+            )
+            shutil.copy2(canonical_path, backup_path)
+            print(f"[pretrain] Saved final model: {canonical_path}")
+            print(f"[pretrain] Saved backup model: {backup_path}")
+            return canonical_path
+        except Exception as exc:  # noqa: PERF203
+            last_error = exc
+            print(f"[pretrain][warn] Save attempt {attempt}/3 failed: {exc}")
+            time.sleep(1.0)
+
+    raise RuntimeError(f"Failed to save pretrained model after 3 attempts: {last_error}")
 
 
 class BacktestProgressCallback(BaseCallback):
@@ -217,6 +247,8 @@ class PlateauStopCallback(BaseCallback):
 
 
 def main() -> None:
+    os.makedirs("./checkpoints", exist_ok=True)
+
     env = DummyVecEnv([
         lambda: KrakenBacktestEnv(
             csv_path="D:/ETHUSD_1.csv",
@@ -255,8 +287,7 @@ def main() -> None:
     else:
         print(f"[pretrain] Stop reason: max steps reached ({max_timesteps})")
 
-    os.makedirs("./checkpoints", exist_ok=True)
-    model.save("./checkpoints/pretrained_sac.zip")
+    _save_and_verify_pretrained_model(model=model, checkpoint_dir="./checkpoints")
 
     evaluation_summary = _evaluate_pretrained_model(model=model, num_episodes=20)
     print(evaluation_summary)
@@ -264,7 +295,19 @@ def main() -> None:
         stats_file.write(evaluation_summary + "\n")
 
     print('[pretrain] Launching train.py...')
-    subprocess.Popen([sys.executable, 'train.py'])
+    train_log_path = os.path.abspath("./checkpoints/train_autostart.log")
+    with open(train_log_path, "a", encoding="utf-8") as train_log:
+        process = subprocess.Popen(
+            [sys.executable, "train.py"],
+            stdout=train_log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+    print(
+        "[pretrain] train.py started "
+        f"(pid={process.pid}, output redirected to {train_log_path})"
+    )
 
 
 if __name__ == "__main__":
