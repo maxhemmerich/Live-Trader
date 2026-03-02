@@ -32,6 +32,8 @@ st.set_page_config(
 LOG_CSV      = "trading_log.csv"
 SAC_LOG_CSV  = "sac_log.csv"
 PRETRAIN_LOG_CSV = "pretrain_log.csv"
+PRETRAINED_MODEL_PATH = "./checkpoints/pretrained_sac.zip"
+TRAIN_AUTOSTART_LOG_PATH = "./checkpoints/train_autostart.log"
 
 # ── Sidebar controls ───────────────────────────────────────────────────────
 st.sidebar.title("Dashboard Controls")
@@ -46,6 +48,7 @@ st.sidebar.markdown("---")
 st.sidebar.caption(f"Log file: `{LOG_CSV}`")
 st.sidebar.caption(f"SAC log file: `{SAC_LOG_CSV}`")
 st.sidebar.caption(f"Pretrain log file: `{PRETRAIN_LOG_CSV}`")
+st.sidebar.caption(f"Pretrained model: `{PRETRAINED_MODEL_PATH}`")
 
 # ── Auto-refresh ───────────────────────────────────────────────────────────
 refresh_count = st_autorefresh(
@@ -106,6 +109,8 @@ pretrain_df = load_pretrain_log(PRETRAIN_LOG_CSV)
 
 trading_log_exists = os.path.exists(LOG_CSV)
 pretrain_log_exists = os.path.exists(PRETRAIN_LOG_CSV)
+pretrained_model_exists = os.path.exists(PRETRAINED_MODEL_PATH)
+train_autostart_log_exists = os.path.exists(TRAIN_AUTOSTART_LOG_PATH)
 
 show_pretrain_section = pretrain_log_exists
 show_live_section = trading_log_exists
@@ -161,6 +166,23 @@ if show_pretrain_section:
         pretrain_fig.update_xaxes(title_text="Steps Completed")
         pretrain_fig.update_yaxes(title_text="Mean Reward")
         st.plotly_chart(pretrain_fig, width="stretch")
+
+if show_pretrain_section and not show_live_section and pretrained_model_exists:
+    st.info(
+        "Pretraining artifacts were found, but live trading logs are not available yet. "
+        "`train.py` may still be initializing historical candles or may have failed to start. "
+        "Check `./checkpoints/train_autostart.log` for startup output.",
+        icon="ℹ️",
+    )
+
+    if train_autostart_log_exists:
+        try:
+            with open(TRAIN_AUTOSTART_LOG_PATH, "r", encoding="utf-8") as f:
+                recent_lines = f.readlines()[-20:]
+            st.caption("Recent auto-start log lines")
+            st.code("".join(recent_lines) if recent_lines else "(log exists but is empty)")
+        except Exception as e:
+            st.warning(f"Could not read `{TRAIN_AUTOSTART_LOG_PATH}`: {e}", icon="⚠️")
 
 if show_live_section and show_pretrain_section:
     st.markdown("---")
