@@ -24,10 +24,8 @@ from ta.volatility import AverageTrueRange, BollingerBands
 from ta.volume import OnBalanceVolumeIndicator
 
 BASE_OHLCV_COLUMNS = ["ts", "open", "high", "low", "close", "vol"]
-SHAPE_BONUS = 0.0001
 MAKER_FEE = 0.0016
-N_STEP_RETURN = 20
-N_STEP_GAMMA = 0.99
+REWARD_FEE_RATE = 0.0026
 LAG_VALUES = [
     1,
     2,
@@ -200,9 +198,9 @@ class KrakenLiveEnv(gym.Env):
         self.last_obs = np.zeros((OBSERVATION_SIZE,), dtype=np.float32)
         self.step_count = 0
         self.cumulative_reward = 0.0
-        self.reward_buffer: list[float] = []
         self.starting_portfolio_usd: Optional[float] = None
         self.last_balance = 0.0
+        self.prev_price = 0.0
 
         self._rotate_log_if_needed()
         self._init_log_file()
@@ -744,23 +742,6 @@ class KrakenLiveEnv(gym.Env):
         match = re.search(r"sac_step_(\d+)_\d{8}_\d{6}\.zip$", os.path.basename(path))
         return int(match.group(1)) if match else -1
 
-    def _discounted_buffer_sum(self) -> float:
-        return float(sum(r * (N_STEP_GAMMA**i) for i, r in enumerate(self.reward_buffer)))
-
-    def _compute_n_step_reward(self, reward: float, terminated: bool) -> float:
-        self.reward_buffer.append(float(reward))
-
-        n_step_reward = 0.0
-        if len(self.reward_buffer) >= N_STEP_RETURN:
-            n_step_reward = self._discounted_buffer_sum()
-            self.reward_buffer.pop(0)
-
-        if terminated and self.reward_buffer:
-            n_step_reward += self._discounted_buffer_sum()
-            self.reward_buffer.clear()
-
-        return float(n_step_reward)
-
     def get_latest_checkpoint(self) -> Optional[str]:
         checkpoints = glob.glob(os.path.join(self.checkpoint_dir, "sac_step_*.zip"))
         if not checkpoints:
@@ -784,9 +765,9 @@ class KrakenLiveEnv(gym.Env):
         price = float(self.df.iloc[-1]["close"]) if not self.df.empty else 0.0
         total_usd = self._get_portfolio_value(eth_balance, usd_balance, price)
         self.last_balance = total_usd
+        self.prev_price = price
         self.starting_portfolio_usd = total_usd
         self.cumulative_reward = 0.0
-        self.reward_buffer.clear()
         self.step_count = 0
         self.last_action = "hold"
         self.last_filled_trade_step = 0
@@ -802,7 +783,6 @@ class KrakenLiveEnv(gym.Env):
         return obs, {}
 
     def step(self, action):
-        print(f"reward_buffer_state: len={len(self.reward_buffer)}, sum={sum(self.reward_buffer):.8f}")
         time.sleep(60)
         self._rotate_log_if_needed()
         self._init_log_file()
@@ -831,6 +811,7 @@ class KrakenLiveEnv(gym.Env):
 
         trade_filled = False
         filled_price = 0.0
+        trade_value = 0.0
         forced_hold_reward = False
 
         try:
@@ -864,6 +845,7 @@ class KrakenLiveEnv(gym.Env):
                     if order_eth >= self.min_order_eth:
                         trade_filled, filled_price, canceled = self._execute_limit_order("buy", quote_price, order_eth)
                         if trade_filled:
+                            trade_value = order_eth * max(filled_price, 1e-8)
                             self.last_action = "buy"
                             self.position_entry_price = filled_price
                             self.position_entry_step = self.step_count + 1
@@ -877,6 +859,7 @@ class KrakenLiveEnv(gym.Env):
                     if order_eth >= self.min_order_eth:
                         trade_filled, filled_price, canceled = self._execute_limit_order("sell", quote_price, order_eth)
                         if trade_filled:
+                            trade_value = order_eth * max(filled_price, 1e-8)
                             self.last_action = "sell"
                             self.position_entry_price = None
                             self.position_entry_step = None
@@ -894,24 +877,18 @@ class KrakenLiveEnv(gym.Env):
 
         reward = 0.0
         if not forced_hold_reward:
-            prev_balance = max(self.last_balance, 1e-8)
-            reward = (portfolio_usd - prev_balance) / prev_balance
+            prev_price = max(self.prev_price, 1e-8)
+            price_change = (current_price - prev_price) / prev_price
+            eth_allocation = (eth_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0
+            fee_if_traded = 0.0
             if trade_filled:
-                reward -= MAKER_FEE
-
-            if len(self.df) >= 6:
-                price_change_5 = current_price - float(self.df["close"].iloc[-6])
-                if price_change_5 > 0 and eth_balance > 0:
-                    reward += SHAPE_BONUS
-                elif price_change_5 < 0 and usd_balance > 0:
-                    reward += SHAPE_BONUS
+                fee_if_traded = REWARD_FEE_RATE * trade_value / max(portfolio_usd, 1e-8)
+            reward = (2.0 * eth_allocation - 1.0) * price_change - fee_if_traded
         else:
             self.last_action = "hold"
 
-        # Scale online rewards to match the n-step accumulated reward magnitude used during critic pretraining.
-        scaled_reward = reward * 20.0
-
         self.last_balance = portfolio_usd
+        self.prev_price = current_price
         self.cumulative_reward += float(reward)
         self.last_obs = obs
         self.step_count += 1
@@ -930,9 +907,7 @@ class KrakenLiveEnv(gym.Env):
 
         self._append_log_row(action_raw, float(reward), current_price, portfolio_usd, eth_balance, usd_balance, obs)
 
-        returned_reward = self._compute_n_step_reward(scaled_reward, terminated)
-
-        return obs, returned_reward, terminated, False, {
+        return obs, float(reward), terminated, False, {
             "action_taken": self.last_action,
             "portfolio_usd": portfolio_usd,
             "kill_switch": self.kill_switch,

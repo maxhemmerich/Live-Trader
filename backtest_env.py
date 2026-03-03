@@ -90,14 +90,12 @@ from env import (
     FEATURE_COLUMNS,
     LAG_VALUES,
     MAKER_FEE,
+    REWARD_FEE_RATE,
     OBSERVATION_COLUMNS,
     OBSERVATION_SIZE,
     SCALAR_COLUMNS,
-    SHAPE_BONUS,
     TREND_LAG_VALUES,
     TREND_PREFIXES,
-    N_STEP_GAMMA,
-    N_STEP_RETURN,
 )
 
 
@@ -276,7 +274,7 @@ class KrakenBacktestEnv(gym.Env):
         self.starting_portfolio_usd = 0.0
         self.last_balance = 0.0
         self.last_obs = np.zeros((OBSERVATION_SIZE,), dtype=np.float32)
-        self.reward_buffer: list[float] = []
+        self.prev_price = 0.0
 
     def _validate_data_requirements(self) -> None:
         min_start_idx = max(self.max_buffer_rows - 1, self.sample_start_idx)
@@ -295,23 +293,6 @@ class KrakenBacktestEnv(gym.Env):
 
     def _get_portfolio_value(self, eth_balance: float, usd_balance: float, price: float) -> float:
         return float((eth_balance * price) + usd_balance)
-
-    def _discounted_buffer_sum(self) -> float:
-        return float(sum(r * (N_STEP_GAMMA**i) for i, r in enumerate(self.reward_buffer)))
-
-    def _compute_n_step_reward(self, reward: float, terminated: bool) -> float:
-        self.reward_buffer.append(float(reward))
-
-        n_step_reward = 0.0
-        if len(self.reward_buffer) >= N_STEP_RETURN:
-            n_step_reward = self._discounted_buffer_sum()
-            self.reward_buffer.pop(0)
-
-        if terminated and self.reward_buffer:
-            n_step_reward += self._discounted_buffer_sum()
-            self.reward_buffer.clear()
-
-        return float(n_step_reward)
 
     def _lag_price_vol(self, n: int, close_now: float, vol_now: float) -> tuple[float, float]:
         if self.current_pos < n:
@@ -598,11 +579,10 @@ class KrakenBacktestEnv(gym.Env):
         self.btc_prices.clear()
         self.btc_prices_rsi.clear()
         self.btc_prices_lr.clear()
-        self.reward_buffer.clear()
-
         current_price = float(self.df.iloc[self.current_pos]["close"])
         self.starting_portfolio_usd = self._get_portfolio_value(self.eth_balance, self.usd_balance, current_price)
         self.last_balance = self.starting_portfolio_usd
+        self.prev_price = current_price
 
         obs = self._compute_observation(self.usd_balance, self.eth_balance)
         self.last_obs = obs
@@ -623,6 +603,7 @@ class KrakenBacktestEnv(gym.Env):
 
         trade_filled = False
         filled_price = None
+        trade_value = 0.0
 
         target_eth_alloc: Optional[float] = None
         if action_raw > 0.3:
@@ -649,6 +630,7 @@ class KrakenBacktestEnv(gym.Env):
                     self.eth_balance += buy_eth
                     trade_filled = True
                     filled_price = execution_price
+                    trade_value = buy_eth * execution_price
                     self.last_action = "buy"
                     self.position_entry_price = execution_price
                     self.position_entry_step = self.step_count + 1
@@ -661,6 +643,7 @@ class KrakenBacktestEnv(gym.Env):
                     self.usd_balance += proceeds
                     trade_filled = True
                     filled_price = execution_price
+                    trade_value = sell_eth * execution_price
                     self.last_action = "sell"
                     self.position_entry_price = None
                     self.position_entry_step = None
@@ -670,22 +653,16 @@ class KrakenBacktestEnv(gym.Env):
         obs = self._compute_observation(self.usd_balance, self.eth_balance)
         portfolio_usd = self._get_portfolio_value(self.eth_balance, self.usd_balance, current_price)
 
-        prev_balance = max(self.last_balance, 1e-8)
-        reward = (portfolio_usd - prev_balance) / prev_balance
+        prev_price = max(self.prev_price, 1e-8)
+        price_change = (current_price - prev_price) / prev_price
+        eth_allocation = (self.eth_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0
+        fee_if_traded = 0.0
         if trade_filled:
-            reward -= MAKER_FEE
-
-        # Keep reward shaping aligned with KrakenLiveEnv.step().
-        if len(self.df) >= 6:
-            price_change_5 = current_price - float(self.df["close"].iloc[self.current_pos - 5])
-            if price_change_5 > 0 and self.eth_balance > 0:
-                reward += SHAPE_BONUS
-            elif price_change_5 < 0 and self.usd_balance > 0:
-                reward += SHAPE_BONUS
-
-        scaled_reward = reward * 100.0
+            fee_if_traded = REWARD_FEE_RATE * trade_value / max(portfolio_usd, 1e-8)
+        reward = (2.0 * eth_allocation - 1.0) * price_change - fee_if_traded
 
         self.last_balance = portfolio_usd
+        self.prev_price = current_price
         self.last_obs = obs
         self.step_count += 1
         self.steps_in_episode += 1
@@ -694,15 +671,13 @@ class KrakenBacktestEnv(gym.Env):
             portfolio_usd < 0.5 * self.starting_portfolio_usd
         )
 
-        returned_reward = self._compute_n_step_reward(scaled_reward, terminated)
-
         info = {
             "action_taken": self.last_action,
             "portfolio_usd": portfolio_usd,
             "fill_price": filled_price,
             "eth_allocation": (self.eth_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0,
         }
-        return obs, returned_reward, terminated, False, info
+        return obs, float(reward), terminated, False, info
 
 
 # Import consistency checks requested for feature contracts.
