@@ -908,7 +908,8 @@ class KrakenLiveEnv(gym.Env):
         else:
             self.last_action = "hold"
 
-        scaled_reward = reward * 100.0
+        # Scale online rewards to match the n-step accumulated reward magnitude used during critic pretraining.
+        scaled_reward = reward * 20.0
 
         self.last_balance = portfolio_usd
         self.cumulative_reward += float(reward)
