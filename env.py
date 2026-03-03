@@ -802,6 +802,7 @@ class KrakenLiveEnv(gym.Env):
         return obs, {}
 
     def step(self, action):
+        print(f"reward_buffer_state: len={len(self.reward_buffer)}, sum={sum(self.reward_buffer):.8f}")
         time.sleep(60)
         self._rotate_log_if_needed()
         self._init_log_file()
