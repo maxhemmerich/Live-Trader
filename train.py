@@ -224,7 +224,7 @@ def run_training(total_timesteps: int, checkpoint_every: int) -> None:
 def main() -> None:
     args = parse_args()
     review_contracts()
-    print("✅ env.py and train.py contracts match exactly.")
+    print("env.py and train.py contracts match exactly.")
     print(f"[train] OBSERVATION_SIZE={OBSERVATION_SIZE}")
     run_training(total_timesteps=args.timesteps, checkpoint_every=args.checkpoint_every)
 
