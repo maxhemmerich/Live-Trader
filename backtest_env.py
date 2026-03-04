@@ -138,7 +138,6 @@ class KrakenBacktestEnv(gym.Env):
             "btc_lr12_upper",
         ]
 
-        print(f"[KrakenBacktestEnv] Starting init for CSV: {self.csv_path}")
         load_start_time = time.perf_counter()
         self.full_df = pd.read_csv(
             self.csv_path,
@@ -162,26 +161,15 @@ class KrakenBacktestEnv(gym.Env):
         max_ts = int(self.full_df["ts"].max())
         self.sample_cutoff_ts = max_ts - two_years_ms
         self.sample_start_idx = int(self.full_df["ts"].searchsorted(self.sample_cutoff_ts, side="left"))
-        self.sample_start_date = pd.to_datetime(self.sample_cutoff_ts, unit="ms", utc=True)
-        sampling_start_idx = max(self.max_buffer_rows - 1, self.sample_start_idx)
-        sampling_max_idx = len(self.full_df) - self.episode_length - 1
-        sampling_rows = max(0, sampling_max_idx - sampling_start_idx + 1)
         print(
             f"[KrakenBacktestEnv] Completed load: {total_rows_loaded:,} rows "
             f"in {load_duration_seconds:.2f}s"
-        )
-        print(
-            "[KrakenBacktestEnv] Data zones: "
-            f"total_rows={total_rows_loaded:,}, "
-            f"2y_cutoff={self.sample_start_date.isoformat()}, "
-            f"episode_sampling_rows={sampling_rows:,}"
         )
 
         btc_csv_path = f"D:/BTCUSD_{self.candle_interval}.csv"
         if os.path.exists(btc_csv_path):
             self.btc_df = pd.read_csv(btc_csv_path, header=0)
             original_btc_columns = list(self.btc_df.columns)
-            print(f"[KrakenBacktestEnv] BTC CSV original columns: {original_btc_columns}")
 
             normalized_map = {}
             for column in original_btc_columns:
@@ -228,7 +216,6 @@ class KrakenBacktestEnv(gym.Env):
             self.btc_df["ts"] = self.btc_df["ts"] * 1000
             self.btc_available = len(self.btc_df) > 0
             if self.btc_available:
-                btc_init_start_time = time.perf_counter()
                 btc_close = self.btc_df["close"].astype(np.float64)
                 self.btc_df["btc_return_1"] = btc_close.pct_change(1).fillna(0.0)
                 self.btc_df["btc_return_4"] = btc_close.pct_change(4).fillna(0.0)
@@ -241,10 +228,6 @@ class KrakenBacktestEnv(gym.Env):
                 self.btc_df["btc_lr12_mid"] = btc_mid.fillna(0.0)
                 self.btc_df["btc_lr12_upper"] = btc_upper.fillna(0.0)
                 self.btc_df = self.btc_df.sort_values("ts").reset_index(drop=True)
-                btc_init_duration_seconds = time.perf_counter() - btc_init_start_time
-                print(f"[KrakenBacktestEnv] BTC one-time indicator init completed in {btc_init_duration_seconds:.2f}s")
-        else:
-            print(f"[KrakenBacktestEnv] WARNING: {btc_csv_path} not found. BTC features will be zeros.")
 
         self._validate_data_requirements()
 
@@ -403,13 +386,7 @@ class KrakenBacktestEnv(gym.Env):
         close_np = close.to_numpy(dtype=np.float64)
         # 5-minute bars: 12 bars = 1hr, 288 bars = 1 day, 2016 bars = 1 week, 8000 bars ≈ 28 days.
         for lr_window in [12, 288, 2016, 8000]:
-            lr_channel_start = time.perf_counter()
             lr_mid, lr_upper, lr_lower = _fast_lr_channel(close_np, lr_window)
-            lr_channel_duration_seconds = time.perf_counter() - lr_channel_start
-            print(
-                f"[KrakenBacktestEnv] LR channel window {lr_window} "
-                f"computed in {lr_channel_duration_seconds:.2f}s"
-            )
             self.df[f"lr{lr_window}_mid"] = np.nan_to_num(lr_mid, nan=0.0)
             self.df[f"lr{lr_window}_upper"] = np.nan_to_num(lr_upper, nan=0.0)
             self.df[f"lr{lr_window}_lower"] = np.nan_to_num(lr_lower, nan=0.0)
