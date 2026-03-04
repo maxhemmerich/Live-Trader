@@ -177,8 +177,11 @@ def run_training(total_timesteps: int, checkpoint_every: int) -> None:
         if step % 10 == 0:
             try:
                 ent_coef = float(model.ent_coef_tensor.detach().cpu().item())
-            except Exception:
-                ent_coef = float(model.ent_coef) if isinstance(model.ent_coef, float) else -1.0
+            except:
+                try:
+                    ent_coef = float(model.ent_coef)
+                except:
+                    ent_coef = -1.0
             ent_coef_text = f"{ent_coef:.4f}" if ent_coef >= 0 else "N/A"
 
             logged_metrics = getattr(model.logger, "name_to_value", {})

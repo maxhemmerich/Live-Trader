@@ -5,14 +5,15 @@ from __future__ import annotations
 import os
 import time
 from collections import deque
+from datetime import datetime, timezone
 from typing import Optional
 
 import gymnasium as gym
 import numpy as np
 import pandas as pd
 from gymnasium import spaces
-from ta.momentum import RSIIndicator, StochasticOscillator, WilliamsRIndicator
-from ta.trend import CCIIndicator, EMAIndicator, MACD
+from ta.momentum import RSIIndicator, StochasticOscillator
+from ta.trend import EMAIndicator, MACD
 from ta.volatility import AverageTrueRange, BollingerBands
 from ta.volume import OnBalanceVolumeIndicator
 
@@ -108,7 +109,7 @@ class KrakenBacktestEnv(gym.Env):
         self,
         csv_path: str,
         candle_interval: int = 5,
-        episode_length: int = 5000,
+        episode_length: int = 8000,
         start_idx: int = None,
         initial_usd: float = 50.0,
         initial_eth: float = 0.025,
@@ -154,16 +155,25 @@ class KrakenBacktestEnv(gym.Env):
             },
             usecols=["ts", "open", "high", "low", "close", "vol"],
         )
-        self.full_df["ts"] = self.full_df["ts"] * 1000
+        ts_unit = self._timestamp_unit(self.full_df["ts"])
+        two_years_delta = self._two_year_cutoff_delta(ts_unit)
+        max_ts_raw = int(self.full_df["ts"].max())
+        sample_cutoff_raw = max_ts_raw - two_years_delta
+        self.full_df["ts"] = self._normalize_timestamp_to_ms(self.full_df["ts"])
         total_rows_loaded = len(self.full_df)
         load_duration_seconds = time.perf_counter() - load_start_time
-        two_years_ms = int(2 * 365 * 24 * 60 * 60 * 1000)
-        max_ts = int(self.full_df["ts"].max())
-        self.sample_cutoff_ts = max_ts - two_years_ms
+        self.sample_cutoff_ts = sample_cutoff_raw * 1000 if ts_unit == "seconds" else sample_cutoff_raw
         self.sample_start_idx = int(self.full_df["ts"].searchsorted(self.sample_cutoff_ts, side="left"))
+        cutoff_iso = datetime.fromtimestamp(self.sample_cutoff_ts / 1000.0, tz=timezone.utc).isoformat()
+        sample_rows = total_rows_loaded - self.sample_start_idx
         print(
             f"[KrakenBacktestEnv] Completed load: {total_rows_loaded:,} rows "
             f"in {load_duration_seconds:.2f}s"
+        )
+        print(
+            f"[KrakenBacktestEnv] timestamp_unit={ts_unit}; "
+            f"2y cutoff={self.sample_cutoff_ts} ({cutoff_iso}), "
+            f"available_sample_rows={sample_rows:,}"
         )
 
         btc_csv_path = f"D:/BTCUSD_{self.candle_interval}.csv"
@@ -213,7 +223,7 @@ class KrakenBacktestEnv(gym.Env):
                     "vol": np.float32,
                 }
             )
-            self.btc_df["ts"] = self.btc_df["ts"] * 1000
+            self.btc_df["ts"] = self._normalize_timestamp_to_ms(self.btc_df["ts"])
             self.btc_available = len(self.btc_df) > 0
             if self.btc_available:
                 btc_close = self.btc_df["close"].astype(np.float64)
@@ -332,6 +342,55 @@ class KrakenBacktestEnv(gym.Env):
             pd.Series(lower, index=series.index),
         )
 
+    def _timestamp_unit(self, ts_series: pd.Series) -> str:
+        median_ts = int(ts_series.astype(np.int64).median()) if len(ts_series) else 0
+        return "seconds" if median_ts < 10**12 else "milliseconds"
+
+    def _normalize_timestamp_to_ms(self, ts_series: pd.Series) -> pd.Series:
+        ts_int = ts_series.astype(np.int64)
+        if self._timestamp_unit(ts_int) == "seconds":
+            return ts_int * 1000
+        return ts_int
+
+    def _two_year_cutoff_delta(self, ts_unit: str) -> int:
+        if ts_unit == "seconds":
+            return int(2 * 365 * 24 * 60 * 60)
+        return int(2 * 365 * 24 * 60 * 60 * 1000)
+
+    def _compute_cci_williams_fast(
+        self,
+        high: pd.Series,
+        low: pd.Series,
+        close: pd.Series,
+        cci_window: int = 20,
+        willr_window: int = 14,
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        t0 = time.perf_counter()
+        high_arr = high.to_numpy(dtype=np.float64)
+        low_arr = low.to_numpy(dtype=np.float64)
+        close_arr = close.to_numpy(dtype=np.float64)
+        typical = (high_arr + low_arr + close_arr) / 3.0
+
+        cci = np.full(len(typical), np.nan, dtype=np.float64)
+        if len(typical) >= cci_window:
+            cci_windows = np.lib.stride_tricks.sliding_window_view(typical, cci_window)
+            sma = cci_windows.mean(axis=1)
+            mad = np.mean(np.abs(cci_windows - sma[:, None]), axis=1)
+            cci_values = (typical[cci_window - 1 :] - sma) / ((0.015 * mad) + 1e-8)
+            cci[cci_window - 1 :] = np.clip(cci_values / 200.0, -1.0, 1.0)
+
+        willr = np.full(len(close_arr), np.nan, dtype=np.float64)
+        if len(close_arr) >= willr_window:
+            high_windows = np.lib.stride_tricks.sliding_window_view(high_arr, willr_window)
+            low_windows = np.lib.stride_tricks.sliding_window_view(low_arr, willr_window)
+            highest_high = high_windows.max(axis=1)
+            lowest_low = low_windows.min(axis=1)
+            willr_values = ((highest_high - close_arr[willr_window - 1 :]) / ((highest_high - lowest_low) + 1e-8)) * -100.0
+            willr[willr_window - 1 :] = (willr_values + 100.0) / 100.0
+
+        elapsed = time.perf_counter() - t0
+        return cci, willr, elapsed
+
     def _precompute_indicators(self) -> None:
         if self.df.empty:
             return
@@ -349,12 +408,19 @@ class KrakenBacktestEnv(gym.Env):
         self.df["stoch_k_norm"] = stoch.stoch() / 100.0
         self.df["stoch_d_norm"] = stoch.stoch_signal() / 100.0
 
-        self.df["cci_20_clipped"] = (
-            CCIIndicator(high=high, low=low, close=close, window=20).cci() / 200.0
-        ).clip(-1.0, 1.0)
-        self.df["willr_14_norm"] = (
-            WilliamsRIndicator(high=high, low=low, close=close, lbp=14).williams_r() + 100.0
-        ) / 100.0
+        cci_20_clipped, willr_14_norm, cci_willr_seconds = self._compute_cci_williams_fast(
+            high=high,
+            low=low,
+            close=close,
+            cci_window=20,
+            willr_window=14,
+        )
+        self.df["cci_20_clipped"] = np.nan_to_num(cci_20_clipped, nan=0.0)
+        self.df["willr_14_norm"] = np.nan_to_num(willr_14_norm, nan=0.0)
+        print(
+            f"[KrakenBacktestEnv] cci_williams_r block: {cci_willr_seconds:.4f}s "
+            f"(target < 0.1000s)"
+        )
 
         self.df["adx_14_norm"] = self._fast_adx(high, low, close, window=14)
 
