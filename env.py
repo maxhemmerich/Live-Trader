@@ -85,7 +85,7 @@ TREND_PREFIXES = [
 ]
 TREND_LAG_VALUES = [1, 4, 16, 64, 256]
 TREND_LAG_COLUMNS = [f"{prefix}_lag_{n}" for prefix in TREND_PREFIXES for n in TREND_LAG_VALUES]
-LR_WINDOWS = [60, 1440, 10080, 40000]
+LR_WINDOWS = [12, 288, 2016, 8000]
 LR_CHANNEL_COLUMNS = [f"lr{n}_{suffix}" for n in LR_WINDOWS for suffix in ("mid", "upper", "lower")]
 ORDER_BOOK_COLUMNS = [
     "bid_ask_spread_frac",
@@ -110,8 +110,8 @@ BTC_FEATURE_COLUMNS = [
     "btc_eth_return_diff_1",
     "btc_eth_return_diff_4",
     "btc_eth_return_diff_16",
-    "btc_lr60_mid",
-    "btc_lr60_upper",
+    "btc_lr12_mid",
+    "btc_lr12_upper",
 ]
 
 FEATURE_COLUMNS = (
@@ -136,7 +136,8 @@ class KrakenLiveEnv(gym.Env):
     def __init__(
         self,
         symbol: str = "ETH/USD",
-        timeframe: str = "1m",
+        timeframe: str = "5m",
+        candle_interval: int = 5,
         candle_limit: int = 720,
         max_buffer_rows: int = 40000,
         checkpoint_dir: str = "./checkpoints/",
@@ -146,6 +147,7 @@ class KrakenLiveEnv(gym.Env):
         load_dotenv()
 
         self.symbol = symbol
+        self.candle_interval = candle_interval
         self.timeframe = timeframe
         self.candle_limit = candle_limit
         self.max_buffer_rows = max_buffer_rows
@@ -190,7 +192,7 @@ class KrakenLiveEnv(gym.Env):
 
         self.btc_prices: deque[float] = deque(maxlen=20)
         self.btc_prices_rsi: deque[float] = deque(maxlen=30)
-        self.btc_prices_lr: deque[float] = deque(maxlen=60)
+        self.btc_prices_lr: deque[float] = deque(maxlen=12)
 
         self.df = self._initialize_candle_buffer()
         self.distant_anchors = self._init_distant_anchors()
@@ -221,11 +223,16 @@ class KrakenLiveEnv(gym.Env):
         self.logger.info("Rotated stale trading log to %s", archived)
 
     def _initialize_candle_buffer(self) -> pd.DataFrame:
-        csv_path = "D:/ETHUSD_1.csv"
+        csv_path = f"D:/ETHUSD_{self.candle_interval}.csv"
 
         def _fetch_live_candles() -> list[list[float]]:
             try:
-                bars = self.exchange.fetch_ohlcv("ETH/USD", "1m", limit=720)
+                bars = self.exchange.fetch_ohlcv(
+                    "ETH/USD",
+                    f"{self.candle_interval}m",
+                    limit=self.candle_limit,
+                    params={"interval": self.candle_interval},
+                )
                 self.consecutive_errors = 0
                 return bars
             except Exception as exc:
@@ -247,18 +254,18 @@ class KrakenLiveEnv(gym.Env):
             merged = pd.concat([csv_df, live_df], ignore_index=True)
             merged.drop_duplicates(subset=["ts"], inplace=True)
             merged.sort_values("ts", inplace=True)
-            trimmed = merged.tail(40000).reset_index(drop=True)
+            trimmed = merged.tail(self.max_buffer_rows).reset_index(drop=True)
             print(
                 f"[INIT] Loaded {len(csv_df)} rows from CSV + {len(live_df)} live candles = {len(trimmed)} total rows"
             )
             return trimmed
 
-        print("[INIT][WARNING] CSV not found at D:/ETHUSD_1.csv, loading API candles only.")
+        print(f"[INIT][WARNING] CSV not found at {csv_path}, loading API candles only.")
         live_bars = _fetch_live_candles()
         live_df = pd.DataFrame(live_bars, columns=BASE_OHLCV_COLUMNS)
         live_df.drop_duplicates(subset=["ts"], inplace=True)
         live_df.sort_values("ts", inplace=True)
-        trimmed = live_df.tail(40000).reset_index(drop=True)
+        trimmed = live_df.tail(self.max_buffer_rows).reset_index(drop=True)
         print(f"[INIT] Loaded 0 rows from CSV + {len(live_df)} live candles = {len(trimmed)} total rows")
         return trimmed
 
@@ -272,8 +279,14 @@ class KrakenLiveEnv(gym.Env):
 
     def _fetch_anchor_value(self, n: int) -> tuple[float, float]:
         try:
-            since_ms = int(time.time() * 1000) - (n * 60000)
-            data = self.exchange.fetch_ohlcv(self.symbol, self.timeframe, since=since_ms, limit=2)
+            since_ms = int(time.time() * 1000) - (n * self.candle_interval * 60000)
+            data = self.exchange.fetch_ohlcv(
+                self.symbol,
+                self.timeframe,
+                since=since_ms,
+                limit=2,
+                params={"interval": self.candle_interval},
+            )
             if data:
                 bar = data[-1]
                 return float(bar[4]), float(bar[5])
@@ -435,17 +448,17 @@ class KrakenLiveEnv(gym.Env):
                 curr_eth = float(self.df["close"].iloc[-1])
                 return (curr_eth - prev_eth) / (prev_eth + 1e-8)
 
-            btc_lr60_mid = 0.0
-            btc_lr60_upper = 0.0
-            if len(self.btc_prices_lr) >= 60:
-                y = np.array(list(self.btc_prices_lr)[-60:], dtype=np.float64)
-                x = np.arange(60, dtype=np.float64)
+            btc_lr12_mid = 0.0
+            btc_lr12_upper = 0.0
+            if len(self.btc_prices_lr) >= 12:
+                y = np.array(list(self.btc_prices_lr)[-12:], dtype=np.float64)
+                x = np.arange(12, dtype=np.float64)
                 slope, intercept = np.polyfit(x, y, 1)
                 fit = (slope * x) + intercept
-                reg_now = float((slope * 59) + intercept)
+                reg_now = float((slope * 11) + intercept)
                 resid_std = float(np.std(y - fit))
-                btc_lr60_mid = (reg_now - btc_price) / (btc_price + 1e-8)
-                btc_lr60_upper = ((reg_now + 2.0 * resid_std) - btc_price) / (btc_price + 1e-8)
+                btc_lr12_mid = (reg_now - btc_price) / (btc_price + 1e-8)
+                btc_lr12_upper = ((reg_now + 2.0 * resid_std) - btc_price) / (btc_price + 1e-8)
 
             return [
                 btc_return_1,
@@ -456,8 +469,8 @@ class KrakenLiveEnv(gym.Env):
                 btc_return_1 - eth_ret(1),
                 btc_return_4 - eth_ret(4),
                 btc_return_16 - eth_ret(16),
-                btc_lr60_mid,
-                btc_lr60_upper,
+                btc_lr12_mid,
+                btc_lr12_upper,
             ]
         except Exception:
             return [0.0] * len(BTC_FEATURE_COLUMNS)
@@ -708,14 +721,24 @@ class KrakenLiveEnv(gym.Env):
 
     def _maintenance_retry_fetch_ohlcv(self, **kwargs):
         try:
-            data = self.exchange.fetch_ohlcv(self.symbol, timeframe=self.timeframe, **kwargs)
+            data = self.exchange.fetch_ohlcv(
+                self.symbol,
+                timeframe=self.timeframe,
+                params={"interval": self.candle_interval},
+                **kwargs,
+            )
             self.consecutive_errors = 0
             return data, False
         except Exception as exc:
             maintenance = self._record_api_error(exc)
             if maintenance:
                 try:
-                    data = self.exchange.fetch_ohlcv(self.symbol, timeframe=self.timeframe, **kwargs)
+                    data = self.exchange.fetch_ohlcv(
+                        self.symbol,
+                        timeframe=self.timeframe,
+                        params={"interval": self.candle_interval},
+                        **kwargs,
+                    )
                     self.consecutive_errors = 0
                     return data, False
                 except Exception as retry_exc:
@@ -783,7 +806,7 @@ class KrakenLiveEnv(gym.Env):
         return obs, {}
 
     def step(self, action):
-        time.sleep(60)
+        time.sleep(self.candle_interval * 60)
         self._rotate_log_if_needed()
         self._init_log_file()
         self._refresh_distant_anchors_if_needed()

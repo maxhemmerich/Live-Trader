@@ -58,19 +58,19 @@ def main() -> None:
 
     _print_observation_size_delta()
 
-    env = KrakenLiveEnv()
+    env = KrakenLiveEnv(candle_interval=5, timeframe="5m")
 
     synthetic_df = pd.DataFrame(
         [
-            [1700000000000 + i * 60000, 2000.0 + i, 2005.0 + i, 1995.0 + i, 2002.0 + i, 10.0 + i]
+            [1700000000000 + i * 300000, 2000.0 + i, 2005.0 + i, 1995.0 + i, 2002.0 + i, 10.0 + i]
             for i in range(500)
         ],
         columns=env_module.BASE_OHLCV_COLUMNS,
     )
 
     class MockExchange:
-        def fetch_ohlcv(self, symbol, timeframe="1m", since=None, limit=3):
-            del symbol, timeframe, since
+        def fetch_ohlcv(self, symbol, timeframe="5m", since=None, limit=3, params=None):
+            del symbol, timeframe, since, params
             rows = synthetic_df[env_module.BASE_OHLCV_COLUMNS].values.tolist()
             return rows[-limit:]
 
