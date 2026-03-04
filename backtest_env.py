@@ -107,6 +107,7 @@ class KrakenBacktestEnv(gym.Env):
     def __init__(
         self,
         csv_path: str,
+        candle_interval: int = 5,
         episode_length: int = 5000,
         start_idx: int = None,
         initial_usd: float = 50.0,
@@ -115,6 +116,7 @@ class KrakenBacktestEnv(gym.Env):
     ) -> None:
         super().__init__()
         self.csv_path = csv_path
+        self.candle_interval = int(candle_interval)
         self.episode_length = int(episode_length)
         self.start_idx = int(start_idx) if start_idx is not None else None
         self.initial_usd = float(initial_usd)
@@ -123,7 +125,7 @@ class KrakenBacktestEnv(gym.Env):
         self.min_order_eth = 0.001
         self.btc_prices: deque[float] = deque(maxlen=20)
         self.btc_prices_rsi: deque[float] = deque(maxlen=30)
-        self.btc_prices_lr: deque[float] = deque(maxlen=60)
+        self.btc_prices_lr: deque[float] = deque(maxlen=12)
         self.btc_df: Optional[pd.DataFrame] = None
         self.btc_available = False
         self.btc_feature_cols = [
@@ -132,8 +134,8 @@ class KrakenBacktestEnv(gym.Env):
             "btc_return_16",
             "btc_ema20_dev",
             "btc_rsi14_norm",
-            "btc_lr60_mid",
-            "btc_lr60_upper",
+            "btc_lr12_mid",
+            "btc_lr12_upper",
         ]
 
         print(f"[KrakenBacktestEnv] Starting init for CSV: {self.csv_path}")
@@ -175,7 +177,7 @@ class KrakenBacktestEnv(gym.Env):
             f"episode_sampling_rows={sampling_rows:,}"
         )
 
-        btc_csv_path = "D:/BTCUSD_1.csv"
+        btc_csv_path = f"D:/BTCUSD_{self.candle_interval}.csv"
         if os.path.exists(btc_csv_path):
             self.btc_df = pd.read_csv(btc_csv_path, header=0)
             original_btc_columns = list(self.btc_df.columns)
@@ -235,14 +237,14 @@ class KrakenBacktestEnv(gym.Env):
                 self.btc_df["btc_ema20_dev"] = ((btc_close / (btc_ema20 + 1e-8)) - 1.0).fillna(0.0)
                 btc_rsi14 = RSIIndicator(close=btc_close, window=14).rsi()
                 self.btc_df["btc_rsi14_norm"] = ((btc_rsi14 - 50.0) / 50.0).fillna(0.0)
-                btc_mid, btc_upper, _ = self._rolling_lr_channel(btc_close, 60)
-                self.btc_df["btc_lr60_mid"] = btc_mid.fillna(0.0)
-                self.btc_df["btc_lr60_upper"] = btc_upper.fillna(0.0)
+                btc_mid, btc_upper, _ = self._rolling_lr_channel(btc_close, 12)
+                self.btc_df["btc_lr12_mid"] = btc_mid.fillna(0.0)
+                self.btc_df["btc_lr12_upper"] = btc_upper.fillna(0.0)
                 self.btc_df = self.btc_df.sort_values("ts").reset_index(drop=True)
                 btc_init_duration_seconds = time.perf_counter() - btc_init_start_time
                 print(f"[KrakenBacktestEnv] BTC one-time indicator init completed in {btc_init_duration_seconds:.2f}s")
         else:
-            print("[KrakenBacktestEnv] WARNING: D:/BTCUSD_1.csv not found. BTC features will be zeros.")
+            print(f"[KrakenBacktestEnv] WARNING: {btc_csv_path} not found. BTC features will be zeros.")
 
         self._validate_data_requirements()
 
@@ -399,7 +401,8 @@ class KrakenBacktestEnv(gym.Env):
         self.df["obv_pct_change"] = obv.pct_change()
 
         close_np = close.to_numpy(dtype=np.float64)
-        for lr_window in [60, 1440, 10080, 40000]:
+        # 5-minute bars: 12 bars = 1hr, 288 bars = 1 day, 2016 bars = 1 week, 8000 bars ≈ 28 days.
+        for lr_window in [12, 288, 2016, 8000]:
             lr_channel_start = time.perf_counter()
             lr_mid, lr_upper, lr_lower = _fast_lr_channel(close_np, lr_window)
             lr_channel_duration_seconds = time.perf_counter() - lr_channel_start
@@ -449,8 +452,8 @@ class KrakenBacktestEnv(gym.Env):
             float(eth_row.get("btc_return_1", 0.0) - eth_row.get("eth_return_1", 0.0)),
             float(eth_row.get("btc_return_4", 0.0) - eth_row.get("eth_return_4", 0.0)),
             float(eth_row.get("btc_return_16", 0.0) - eth_row.get("eth_return_16", 0.0)),
-            float(eth_row.get("btc_lr60_mid", 0.0)),
-            float(eth_row.get("btc_lr60_upper", 0.0)),
+            float(eth_row.get("btc_lr12_mid", 0.0)),
+            float(eth_row.get("btc_lr12_upper", 0.0)),
         ]
 
     def _compute_observation(self, usd_balance: float, eth_balance: float) -> np.ndarray:
@@ -486,10 +489,10 @@ class KrakenBacktestEnv(gym.Env):
                 trend_lags.append(self._series_lag_value(prefix, n, transform="tanh"))
 
         lr_channel_features = [
-            float(row.get("lr60_mid", 0.0)), float(row.get("lr60_upper", 0.0)), float(row.get("lr60_lower", 0.0)),
-            float(row.get("lr1440_mid", 0.0)), float(row.get("lr1440_upper", 0.0)), float(row.get("lr1440_lower", 0.0)),
-            float(row.get("lr10080_mid", 0.0)), float(row.get("lr10080_upper", 0.0)), float(row.get("lr10080_lower", 0.0)),
-            float(row.get("lr40000_mid", 0.0)), float(row.get("lr40000_upper", 0.0)), float(row.get("lr40000_lower", 0.0)),
+            float(row.get("lr12_mid", 0.0)), float(row.get("lr12_upper", 0.0)), float(row.get("lr12_lower", 0.0)),
+            float(row.get("lr288_mid", 0.0)), float(row.get("lr288_upper", 0.0)), float(row.get("lr288_lower", 0.0)),
+            float(row.get("lr2016_mid", 0.0)), float(row.get("lr2016_upper", 0.0)), float(row.get("lr2016_lower", 0.0)),
+            float(row.get("lr8000_mid", 0.0)), float(row.get("lr8000_upper", 0.0)), float(row.get("lr8000_lower", 0.0)),
         ]
 
         order_book_features = [

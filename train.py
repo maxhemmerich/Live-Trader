@@ -103,7 +103,7 @@ def parse_args() -> argparse.Namespace:
 
 def run_training(total_timesteps: int, checkpoint_every: int) -> None:
     print("[train] Creating KrakenLiveEnv (this performs 40k historical bar initialization)...")
-    env = KrakenLiveEnv(max_buffer_rows=40_000)
+    env = KrakenLiveEnv(candle_interval=5, timeframe="5m", max_buffer_rows=40_000)
     print(f"[train] Candle buffer initialized with {len(env.df)} rows.")
 
     latest_checkpoint = env.get_latest_checkpoint()
