@@ -201,7 +201,7 @@ class RotatingCheckpointCallback(CheckpointCallback):
 class PlateauStopCallback(BaseCallback):
     """Stop pretraining when episodic rewards flatten after a warmup period."""
 
-    def __init__(self, min_steps: int = 200_000, recent_episodes: int = 5) -> None:
+    def __init__(self, min_steps: int = 400_000, recent_episodes: int = 5) -> None:
         super().__init__()
         self.min_steps = int(min_steps)
         self.recent_episodes = int(recent_episodes)
@@ -234,7 +234,7 @@ class PlateauStopCallback(BaseCallback):
         improvement = recent_mean - previous_mean
         plateau_threshold = 0.01 * max(abs(recent_mean), 1e-8)
 
-        if improvement < plateau_threshold:
+        if abs(improvement) < plateau_threshold and recent_mean > -0.5:
             self.stopped_by_plateau = True
             self.stop_reason = (
                 f"plateau detected (improvement={improvement:+.6f}, "
@@ -270,7 +270,7 @@ def main() -> None:
         learning_starts=200,
     )
 
-    plateau_callback = PlateauStopCallback(min_steps=200_000, recent_episodes=5)
+    plateau_callback = PlateauStopCallback(min_steps=400_000, recent_episodes=5)
     callback = CallbackList([
         BacktestProgressCallback(print_every=1_000),
         RotatingCheckpointCallback(
@@ -295,6 +295,26 @@ def main() -> None:
     print(evaluation_summary)
     with open("./checkpoints/pretrain_stats.txt", "w", encoding="utf-8") as stats_file:
         stats_file.write(evaluation_summary + "\n")
+
+    if len(plateau_callback.completed_episode_rewards) >= plateau_callback.recent_episodes:
+        recent_mean = float(
+            np.mean(plateau_callback.completed_episode_rewards[-plateau_callback.recent_episodes:])
+        )
+    elif plateau_callback.completed_episode_rewards:
+        recent_mean = float(np.mean(plateau_callback.completed_episode_rewards))
+    else:
+        recent_mean = 0.0
+
+    if recent_mean <= 0:
+        print(
+            "[pretrain][warn] Recent mean reward is not positive "
+            f"(recent_mean={recent_mean:+.6f})."
+        )
+        print(
+            "Pretraining did not reach positive reward. "
+            "Run pretrain.py again or launch train.py manually when ready."
+        )
+        return
 
     print('[pretrain] Launching train.py...')
     train_log_path = os.path.abspath("./checkpoints/train_autostart.log")
