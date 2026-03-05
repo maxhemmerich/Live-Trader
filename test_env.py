@@ -3,9 +3,26 @@
 import numpy as np
 import pandas as pd
 
-import env as env_module
+import types
+import sys
+
+try:
+    import env as env_module
+except ModuleNotFoundError as exc:
+    if "lighter_client" not in str(exc):
+        raise
+    ccxt_stub = types.ModuleType("ccxt")
+
+    class _StubKraken:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+    ccxt_stub.kraken = _StubKraken
+    sys.modules["ccxt"] = ccxt_stub
+    import env as env_module
+
 from env import (
-    BTC_FEATURE_COLUMNS,
+    ETH_FEATURE_COLUMNS,
     LAG_VALUES,
     LR_CHANNEL_COLUMNS,
     OBSERVATION_SIZE,
@@ -28,7 +45,7 @@ def _print_observation_size_delta() -> None:
         "portfolio": 2,
         "self_awareness": 3,
         "time": 6,
-        "btc": 3,
+        "eth": 3,
     }
     new_counts = {
         "price_lags": len(LAG_VALUES),
@@ -40,7 +57,7 @@ def _print_observation_size_delta() -> None:
         "portfolio": 2,
         "self_awareness": 3,
         "time": 6,
-        "btc": len(BTC_FEATURE_COLUMNS),
+        "eth": len(ETH_FEATURE_COLUMNS),
     }
     old_size = sum(old_counts.values())
     new_size = sum(new_counts.values())
@@ -58,26 +75,26 @@ def main() -> None:
 
     _print_observation_size_delta()
 
-    env = KrakenLiveEnv(candle_interval=5, timeframe="5m")
+    env = KrakenLiveEnv(candle_interval=1, timeframe="1m")
 
     synthetic_df = pd.DataFrame(
         [
-            [1700000000000 + i * 300000, 2000.0 + i, 2005.0 + i, 1995.0 + i, 2002.0 + i, 10.0 + i]
+            [1700000000000 + i * 60000, 2000.0 + i, 2005.0 + i, 1995.0 + i, 2002.0 + i, 10.0 + i]
             for i in range(500)
         ],
         columns=env_module.BASE_OHLCV_COLUMNS,
     )
 
     class MockExchange:
-        def fetch_ohlcv(self, symbol, timeframe="5m", since=None, limit=3, params=None):
+        def fetch_ohlcv(self, symbol, timeframe="1m", since=None, limit=3, params=None):
             del symbol, timeframe, since, params
             rows = synthetic_df[env_module.BASE_OHLCV_COLUMNS].values.tolist()
             return rows[-limit:]
 
         def fetch_balance(self):
             return {
-                "free": {"ETH": 0.05, "USD": 135.0},
-                "total": {"ETH": 0.05, "USD": 135.0},
+                "free": {"XBT": 0.05, "USD": 135.0},
+                "total": {"XBT": 0.05, "USD": 135.0},
             }
 
         def fetch_order_book(self, symbol, limit=20):

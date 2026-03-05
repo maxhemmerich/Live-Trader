@@ -1,4 +1,4 @@
-"""Historical-only backtesting Gymnasium environment for Kraken ETH/USD data."""
+"""Historical-only backtesting Gymnasium environment for Kraken XBT/USD data."""
 
 from __future__ import annotations
 
@@ -117,11 +117,11 @@ class KrakenBacktestEnv(gym.Env):
     def __init__(
         self,
         csv_path: str,
-        candle_interval: int = 5,
+        candle_interval: int = 1,
         episode_length: int = 8000,
         start_idx: int = None,
         initial_usd: float = 50.0,
-        initial_eth: float = 0.025,
+        initial_btc: float = 0.025,
         max_buffer_rows: int = 40000,
     ) -> None:
         super().__init__()
@@ -130,22 +130,22 @@ class KrakenBacktestEnv(gym.Env):
         self.episode_length = int(episode_length)
         self.start_idx = int(start_idx) if start_idx is not None else None
         self.initial_usd = float(initial_usd)
-        self.initial_eth = float(initial_eth)
+        self.initial_btc = float(initial_btc)
         self.max_buffer_rows = int(max_buffer_rows)
-        self.min_order_eth = 0.001
-        self.btc_prices: deque[float] = deque(maxlen=20)
-        self.btc_prices_rsi: deque[float] = deque(maxlen=30)
-        self.btc_prices_lr: deque[float] = deque(maxlen=12)
-        self.btc_df: Optional[pd.DataFrame] = None
-        self.btc_available = False
-        self.btc_feature_cols = [
-            "btc_return_1",
-            "btc_return_4",
-            "btc_return_16",
-            "btc_ema20_dev",
-            "btc_rsi14_norm",
-            "btc_lr12_mid",
-            "btc_lr12_upper",
+        self.min_order_btc = 0.0001
+        self.eth_prices: deque[float] = deque(maxlen=20)
+        self.eth_prices_rsi: deque[float] = deque(maxlen=30)
+        self.eth_prices_lr: deque[float] = deque(maxlen=12)
+        self.eth_df: Optional[pd.DataFrame] = None
+        self.eth_available = False
+        self.eth_feature_cols = [
+            "eth_return_1",
+            "eth_return_4",
+            "eth_return_16",
+            "eth_ema20_dev",
+            "eth_rsi14_norm",
+            "eth_lr12_mid",
+            "eth_lr12_upper",
         ]
 
         load_start_time = time.perf_counter()
@@ -186,13 +186,13 @@ class KrakenBacktestEnv(gym.Env):
             f"available_sample_rows={sample_rows:,}"
         )
 
-        btc_csv_path = f"D:/BTCUSD_{self.candle_interval}.csv"
-        if os.path.exists(btc_csv_path):
-            self.btc_df = pd.read_csv(btc_csv_path, header=0)
-            original_btc_columns = list(self.btc_df.columns)
+        eth_csv_path = f"D:/ETHUSD_{self.candle_interval}.csv"
+        if os.path.exists(eth_csv_path):
+            self.eth_df = pd.read_csv(eth_csv_path, header=0)
+            original_eth_columns = list(self.eth_df.columns)
 
             normalized_map = {}
-            for column in original_btc_columns:
+            for column in original_eth_columns:
                 col_norm = str(column).strip().lower()
                 if col_norm in {"ts", "timestamp", "time", "datetime", "date"}:
                     normalized_map[column] = "ts"
@@ -207,23 +207,23 @@ class KrakenBacktestEnv(gym.Env):
                 elif col_norm in {"vol", "volume", "v"}:
                     normalized_map[column] = "vol"
 
-            self.btc_df = self.btc_df.rename(columns=normalized_map)
+            self.eth_df = self.eth_df.rename(columns=normalized_map)
 
             expected_cols = ["ts", "open", "high", "low", "close", "vol"]
-            missing = [col for col in expected_cols if col not in self.btc_df.columns]
+            missing = [col for col in expected_cols if col not in self.eth_df.columns]
             if missing:
-                fallback_cols = list(self.btc_df.columns[:6])
+                fallback_cols = list(self.eth_df.columns[:6])
                 if len(fallback_cols) == 6:
-                    self.btc_df = self.btc_df[fallback_cols].copy()
-                    self.btc_df.columns = expected_cols
+                    self.eth_df = self.eth_df[fallback_cols].copy()
+                    self.eth_df.columns = expected_cols
                 else:
                     raise ValueError(
-                        f"BTC CSV missing expected columns {missing} and does not have at least 6 columns for fallback mapping."
+                        f"ETH CSV missing expected columns {missing} and does not have at least 6 columns for fallback mapping."
                     )
             else:
-                self.btc_df = self.btc_df[expected_cols].copy()
+                self.eth_df = self.eth_df[expected_cols].copy()
 
-            self.btc_df = self.btc_df.astype(
+            self.eth_df = self.eth_df.astype(
                 {
                     "ts": np.int64,
                     "open": np.float32,
@@ -233,23 +233,25 @@ class KrakenBacktestEnv(gym.Env):
                     "vol": np.float32,
                 }
             )
-            self.btc_df["ts"] = self._normalize_timestamp_to_ms(self.btc_df["ts"])
-            self.btc_available = len(self.btc_df) > 0
-            if self.btc_available:
-                btc_close = self.btc_df["close"].astype(np.float64)
-                self.btc_df["btc_return_1"] = btc_close.pct_change(1).fillna(0.0)
-                self.btc_df["btc_return_4"] = btc_close.pct_change(4).fillna(0.0)
-                self.btc_df["btc_return_16"] = btc_close.pct_change(16).fillna(0.0)
-                btc_ema20 = EMAIndicator(close=btc_close, window=20).ema_indicator()
-                self.btc_df["btc_ema20_dev"] = ((btc_close / (btc_ema20 + 1e-8)) - 1.0).fillna(0.0)
-                btc_rsi14 = RSIIndicator(close=btc_close, window=14).rsi()
-                self.btc_df["btc_rsi14_norm"] = ((btc_rsi14 - 50.0) / 50.0).fillna(0.0)
-                btc_mid, btc_upper, _ = self._rolling_lr_channel(btc_close, 12)
-                self.btc_df["btc_lr12_mid"] = btc_mid.fillna(0.0)
-                self.btc_df["btc_lr12_upper"] = btc_upper.fillna(0.0)
-                self.btc_df = self.btc_df.sort_values("ts").reset_index(drop=True)
+            self.eth_df["ts"] = self._normalize_timestamp_to_ms(self.eth_df["ts"])
+            self.eth_available = len(self.eth_df) > 0
+            if self.eth_available:
+                eth_close = self.eth_df["close"].astype(np.float64)
+                self.eth_df["eth_return_1"] = eth_close.pct_change(1).fillna(0.0)
+                self.eth_df["eth_return_4"] = eth_close.pct_change(4).fillna(0.0)
+                self.eth_df["eth_return_16"] = eth_close.pct_change(16).fillna(0.0)
+                eth_ema20 = EMAIndicator(close=eth_close, window=20).ema_indicator()
+                self.eth_df["eth_ema20_dev"] = ((eth_close / (eth_ema20 + 1e-8)) - 1.0).fillna(0.0)
+                eth_rsi14 = RSIIndicator(close=eth_close, window=14).rsi()
+                self.eth_df["eth_rsi14_norm"] = ((eth_rsi14 - 50.0) / 50.0).fillna(0.0)
+                eth_mid, eth_upper, _ = self._rolling_lr_channel(eth_close, 12)
+                self.eth_df["eth_lr12_mid"] = eth_mid.fillna(0.0)
+                self.eth_df["eth_lr12_upper"] = eth_upper.fillna(0.0)
+                self.eth_df = self.eth_df.sort_values("ts").reset_index(drop=True)
 
         self._validate_data_requirements()
+
+        print("[init] Primary asset: XBT/USD | Secondary feature: ETH/USD | Candle interval: 1min")
 
         self.action_space = spaces.Box(
             low=np.array([-1.0], dtype=np.float32),
@@ -275,7 +277,7 @@ class KrakenBacktestEnv(gym.Env):
         self.position_entry_price: Optional[float] = None
         self.position_entry_step: Optional[int] = None
         self.usd_balance = self.initial_usd
-        self.eth_balance = self.initial_eth
+        self.btc_balance = self.initial_btc
         self.starting_portfolio_usd = 0.0
         self.last_balance = 0.0
         self.last_obs = np.zeros((OBSERVATION_SIZE,), dtype=np.float32)
@@ -296,8 +298,8 @@ class KrakenBacktestEnv(gym.Env):
                 f"start_idx must be in [{min_start_idx}, {max_start_idx}], got {self.start_idx}."
             )
 
-    def _get_portfolio_value(self, eth_balance: float, usd_balance: float, price: float) -> float:
-        return float((eth_balance * price) + usd_balance)
+    def _get_portfolio_value(self, btc_balance: float, usd_balance: float, price: float) -> float:
+        return float((btc_balance * price) + usd_balance)
 
     def _lag_price_vol(self, n: int, close_now: float, vol_now: float) -> tuple[float, float]:
         if self.current_pos < n:
@@ -482,39 +484,39 @@ class KrakenBacktestEnv(gym.Env):
         self.df["bid_ask_imbalance"] = imbalance.clip(-1.0, 1.0).fillna(0.0)
         self.df["price_dist_best_bid"] = ((close - low) / (close + 1e-8)).clip(-1.0, 1.0).fillna(0.0)
 
-        self.df["eth_return_1"] = close.pct_change(1).fillna(0.0)
-        self.df["eth_return_4"] = close.pct_change(4).fillna(0.0)
-        self.df["eth_return_16"] = close.pct_change(16).fillna(0.0)
+        self.df["btc_return_1"] = close.pct_change(1).fillna(0.0)
+        self.df["btc_return_4"] = close.pct_change(4).fillna(0.0)
+        self.df["btc_return_16"] = close.pct_change(16).fillna(0.0)
 
-        if self.btc_available and self.btc_df is not None:
-            btc_features = self.btc_df[["ts", *self.btc_feature_cols]]
+        if self.eth_available and self.eth_df is not None:
+            eth_features = self.eth_df[["ts", *self.eth_feature_cols]]
             self.df = pd.merge_asof(
                 self.df.sort_values("ts"),
-                btc_features,
+                eth_features,
                 on="ts",
                 direction="backward",
             ).sort_index()
-            self.df[self.btc_feature_cols] = self.df[self.btc_feature_cols].fillna(0.0)
+            self.df[self.eth_feature_cols] = self.df[self.eth_feature_cols].fillna(0.0)
         else:
-            for col in self.btc_feature_cols:
+            for col in self.eth_feature_cols:
                 self.df[col] = 0.0
 
-    def _get_btc_features(self) -> list[float]:
-        eth_row = self.df.iloc[self.current_pos]
+    def _get_eth_features(self) -> list[float]:
+        row = self.df.iloc[self.current_pos]
         return [
-            float(eth_row.get("btc_return_1", 0.0)),
-            float(eth_row.get("btc_return_4", 0.0)),
-            float(eth_row.get("btc_return_16", 0.0)),
-            float(eth_row.get("btc_ema20_dev", 0.0)),
-            float(eth_row.get("btc_rsi14_norm", 0.0)),
-            float(eth_row.get("btc_return_1", 0.0) - eth_row.get("eth_return_1", 0.0)),
-            float(eth_row.get("btc_return_4", 0.0) - eth_row.get("eth_return_4", 0.0)),
-            float(eth_row.get("btc_return_16", 0.0) - eth_row.get("eth_return_16", 0.0)),
-            float(eth_row.get("btc_lr12_mid", 0.0)),
-            float(eth_row.get("btc_lr12_upper", 0.0)),
+            float(row.get("eth_return_1", 0.0)),
+            float(row.get("eth_return_4", 0.0)),
+            float(row.get("eth_return_16", 0.0)),
+            float(row.get("eth_ema20_dev", 0.0)),
+            float(row.get("eth_rsi14_norm", 0.0)),
+            float(row.get("eth_return_1", 0.0) - row.get("btc_return_1", 0.0)),
+            float(row.get("eth_return_4", 0.0) - row.get("btc_return_4", 0.0)),
+            float(row.get("eth_return_16", 0.0) - row.get("btc_return_16", 0.0)),
+            float(row.get("eth_lr12_mid", 0.0)),
+            float(row.get("eth_lr12_upper", 0.0)),
         ]
 
-    def _compute_observation(self, usd_balance: float, eth_balance: float) -> np.ndarray:
+    def _compute_observation(self, usd_balance: float, btc_balance: float) -> np.ndarray:
         if self.df.empty:
             return np.zeros((OBSERVATION_SIZE,), dtype=np.float32)
         row = self.df.iloc[self.current_pos]
@@ -561,9 +563,9 @@ class KrakenBacktestEnv(gym.Env):
             float(row.get("price_dist_best_bid", 0.0)),
         ]
 
-        portfolio_total = max(self._get_portfolio_value(eth_balance, usd_balance, current_price), 1e-8)
+        portfolio_total = max(self._get_portfolio_value(btc_balance, usd_balance, current_price), 1e-8)
         portfolio_features = [
-            (eth_balance * current_price) / portfolio_total,
+            (btc_balance * current_price) / portfolio_total,
             usd_balance / portfolio_total,
         ]
 
@@ -589,7 +591,7 @@ class KrakenBacktestEnv(gym.Env):
             np.cos(2 * np.pi * dom / 31.0),
         ]
 
-        btc_features = self._get_btc_features()
+        eth_features = self._get_eth_features()
 
         obs = np.array(
             price_lags
@@ -601,7 +603,7 @@ class KrakenBacktestEnv(gym.Env):
             + portfolio_features
             + self_awareness
             + time_features
-            + btc_features,
+            + eth_features,
             dtype=np.float32,
         )
         obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
@@ -629,7 +631,7 @@ class KrakenBacktestEnv(gym.Env):
         print(f"[KrakenBacktestEnv] Precompute completed in {precompute_duration_seconds:.2f}s")
 
         self.usd_balance = self.initial_usd
-        self.eth_balance = self.initial_eth
+        self.btc_balance = self.initial_btc
 
         self.steps_in_episode = 0
         self.step_count = 0
@@ -637,15 +639,15 @@ class KrakenBacktestEnv(gym.Env):
         self.last_filled_trade_step = 0
         self.position_entry_price = None
         self.position_entry_step = None
-        self.btc_prices.clear()
-        self.btc_prices_rsi.clear()
-        self.btc_prices_lr.clear()
+        self.eth_prices.clear()
+        self.eth_prices_rsi.clear()
+        self.eth_prices_lr.clear()
         current_price = float(self.df.iloc[self.current_pos]["close"])
-        self.starting_portfolio_usd = self._get_portfolio_value(self.eth_balance, self.usd_balance, current_price)
+        self.starting_portfolio_usd = self._get_portfolio_value(self.btc_balance, self.usd_balance, current_price)
         self.last_balance = self.starting_portfolio_usd
         self.prev_price = current_price
 
-        obs = self._compute_observation(self.usd_balance, self.eth_balance)
+        obs = self._compute_observation(self.usd_balance, self.btc_balance)
         self.last_obs = obs
         return obs, {}
 
@@ -666,61 +668,61 @@ class KrakenBacktestEnv(gym.Env):
         filled_price = None
         trade_value = 0.0
 
-        target_eth_alloc: Optional[float] = None
+        target_btc_alloc: Optional[float] = None
         if action_raw > 0.3:
-            target_eth_alloc = 1.0
+            target_btc_alloc = 1.0
         elif action_raw < -0.3:
-            target_eth_alloc = 0.0
+            target_btc_alloc = 0.0
 
-        eth_value = self.eth_balance * execution_price
-        portfolio_before = eth_value + self.usd_balance
-        eth_value_gap = 0.0
-        if target_eth_alloc is not None:
-            target_eth_value = portfolio_before * target_eth_alloc
-            eth_value_gap = target_eth_value - eth_value
+        btc_value = self.btc_balance * execution_price
+        portfolio_before = btc_value + self.usd_balance
+        btc_value_gap = 0.0
+        if target_btc_alloc is not None:
+            target_btc_value = portfolio_before * target_btc_alloc
+            btc_value_gap = target_btc_value - btc_value
             alloc_diff_threshold = 0.10 * portfolio_before
 
-        if target_eth_alloc is not None and portfolio_before > 0 and abs(eth_value_gap) > alloc_diff_threshold:
-            if eth_value_gap > 0:
-                buy_eth = eth_value_gap / max(execution_price, 1e-8)
-                max_affordable_eth = self.usd_balance / max(execution_price * (1.0 + MAKER_FEE), 1e-8)
-                buy_eth = min(buy_eth, max_affordable_eth)
-                if buy_eth >= self.min_order_eth:
-                    required = buy_eth * execution_price * (1.0 + MAKER_FEE)
+        if target_btc_alloc is not None and portfolio_before > 0 and abs(btc_value_gap) > alloc_diff_threshold:
+            if btc_value_gap > 0:
+                buy_btc = btc_value_gap / max(execution_price, 1e-8)
+                max_affordable_btc = self.usd_balance / max(execution_price * (1.0 + MAKER_FEE), 1e-8)
+                buy_btc = min(buy_btc, max_affordable_btc)
+                if buy_btc >= self.min_order_btc:
+                    required = buy_btc * execution_price * (1.0 + MAKER_FEE)
                     self.usd_balance -= required
-                    self.eth_balance += buy_eth
+                    self.btc_balance += buy_btc
                     trade_filled = True
                     filled_price = execution_price
-                    trade_value = buy_eth * execution_price
+                    trade_value = buy_btc * execution_price
                     self.last_action = "buy"
                     self.position_entry_price = execution_price
                     self.position_entry_step = self.step_count + 1
                     self.last_filled_trade_step = self.step_count + 1
             else:
-                sell_eth = min(abs(eth_value_gap) / max(execution_price, 1e-8), self.eth_balance)
-                if sell_eth >= self.min_order_eth:
-                    proceeds = sell_eth * execution_price * (1.0 - MAKER_FEE)
-                    self.eth_balance -= sell_eth
+                sell_btc = min(abs(btc_value_gap) / max(execution_price, 1e-8), self.btc_balance)
+                if sell_btc >= self.min_order_btc:
+                    proceeds = sell_btc * execution_price * (1.0 - MAKER_FEE)
+                    self.btc_balance -= sell_btc
                     self.usd_balance += proceeds
                     trade_filled = True
                     filled_price = execution_price
-                    trade_value = sell_eth * execution_price
+                    trade_value = sell_btc * execution_price
                     self.last_action = "sell"
                     self.position_entry_price = None
                     self.position_entry_step = None
                     self.last_filled_trade_step = self.step_count + 1
 
         current_price = float(next_bar["close"])
-        obs = self._compute_observation(self.usd_balance, self.eth_balance)
-        portfolio_usd = self._get_portfolio_value(self.eth_balance, self.usd_balance, current_price)
+        obs = self._compute_observation(self.usd_balance, self.btc_balance)
+        portfolio_usd = self._get_portfolio_value(self.btc_balance, self.usd_balance, current_price)
 
         prev_price = max(self.prev_price, 1e-8)
         price_change = (current_price - prev_price) / prev_price
-        eth_allocation = (self.eth_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0
+        btc_allocation = (self.btc_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0
         fee_if_traded = 0.0
         if trade_filled:
             fee_if_traded = REWARD_FEE_RATE * trade_value / max(portfolio_usd, 1e-8)
-        reward = (2.0 * eth_allocation - 1.0) * price_change - fee_if_traded
+        reward = (2.0 * btc_allocation - 1.0) * price_change - fee_if_traded
 
         self.last_balance = portfolio_usd
         self.prev_price = current_price
@@ -736,7 +738,7 @@ class KrakenBacktestEnv(gym.Env):
             "action_taken": self.last_action,
             "portfolio_usd": portfolio_usd,
             "fill_price": filled_price,
-            "eth_allocation": (self.eth_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0,
+            "btc_allocation": (self.btc_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0,
         }
         return obs, float(reward), terminated, False, info
 

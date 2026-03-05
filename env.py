@@ -94,24 +94,24 @@ ORDER_BOOK_COLUMNS = [
     "bid_ask_imbalance",
     "price_dist_best_bid",
 ]
-PORTFOLIO_COLUMNS = ["eth_value_weight", "usd_value_weight"]
+PORTFOLIO_COLUMNS = ["btc_value_weight", "usd_value_weight"]
 SELF_AWARE_COLUMNS = [
     "last_action_was_buy",
     "bars_since_last_trade",
     "current_position_return",
 ]
 TIME_COLUMNS = ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "dom_sin", "dom_cos"]
-BTC_FEATURE_COLUMNS = [
-    "btc_return_1",
-    "btc_return_4",
-    "btc_return_16",
-    "btc_ema20_dev",
-    "btc_rsi14_norm",
-    "btc_eth_return_diff_1",
-    "btc_eth_return_diff_4",
-    "btc_eth_return_diff_16",
-    "btc_lr12_mid",
-    "btc_lr12_upper",
+ETH_FEATURE_COLUMNS = [
+    "eth_return_1",
+    "eth_return_4",
+    "eth_return_16",
+    "eth_ema20_dev",
+    "eth_rsi14_norm",
+    "eth_btc_return_diff_1",
+    "eth_btc_return_diff_4",
+    "eth_btc_return_diff_16",
+    "eth_lr12_mid",
+    "eth_lr12_upper",
 ]
 
 FEATURE_COLUMNS = (
@@ -124,7 +124,7 @@ FEATURE_COLUMNS = (
     + PORTFOLIO_COLUMNS
     + SELF_AWARE_COLUMNS
     + TIME_COLUMNS
-    + BTC_FEATURE_COLUMNS
+    + ETH_FEATURE_COLUMNS
 )
 OBSERVATION_COLUMNS = FEATURE_COLUMNS
 OBSERVATION_SIZE = len(FEATURE_COLUMNS)
@@ -135,9 +135,9 @@ class KrakenLiveEnv(gym.Env):
 
     def __init__(
         self,
-        symbol: str = "ETH/USD",
-        timeframe: str = "5m",
-        candle_interval: int = 5,
+        symbol: str = "XBT/USD",
+        timeframe: str = "1m",
+        candle_interval: int = 1,
         candle_limit: int = 720,
         max_buffer_rows: int = 40000,
         checkpoint_dir: str = "./checkpoints/",
@@ -153,7 +153,7 @@ class KrakenLiveEnv(gym.Env):
         self.max_buffer_rows = max_buffer_rows
         self.checkpoint_dir = checkpoint_dir
         self.trading_log_path = trading_log_path
-        self.min_order_eth = 0.001
+        self.min_order_btc = 0.0001
 
         self.logger = logging.getLogger(self.__class__.__name__)
         if not self.logger.handlers:
@@ -190,9 +190,9 @@ class KrakenLiveEnv(gym.Env):
         self.position_entry_step: Optional[int] = None
         self.pending_order_id: Optional[str] = None
 
-        self.btc_prices: deque[float] = deque(maxlen=20)
-        self.btc_prices_rsi: deque[float] = deque(maxlen=30)
-        self.btc_prices_lr: deque[float] = deque(maxlen=12)
+        self.eth_prices: deque[float] = deque(maxlen=20)
+        self.eth_prices_rsi: deque[float] = deque(maxlen=30)
+        self.eth_prices_lr: deque[float] = deque(maxlen=12)
 
         self.df = self._initialize_candle_buffer()
         self.distant_anchors = self._init_distant_anchors()
@@ -203,6 +203,8 @@ class KrakenLiveEnv(gym.Env):
         self.starting_portfolio_usd: Optional[float] = None
         self.last_balance = 0.0
         self.prev_price = 0.0
+
+        print("[init] Primary asset: XBT/USD | Secondary feature: ETH/USD | Candle interval: 1min")
 
         self._rotate_log_if_needed()
         self._init_log_file()
@@ -223,12 +225,12 @@ class KrakenLiveEnv(gym.Env):
         self.logger.info("Rotated stale trading log to %s", archived)
 
     def _initialize_candle_buffer(self) -> pd.DataFrame:
-        csv_path = f"D:/ETHUSD_{self.candle_interval}.csv"
+        csv_path = f"D:/XBTUSD_{self.candle_interval}.csv"
 
         def _fetch_live_candles() -> list[list[float]]:
             try:
                 bars = self.exchange.fetch_ohlcv(
-                    "ETH/USD",
+                    self.symbol,
                     f"{self.candle_interval}m",
                     limit=self.candle_limit,
                     params={"interval": self.candle_interval},
@@ -348,15 +350,15 @@ class KrakenLiveEnv(gym.Env):
     @staticmethod
     def _extract_balances(balance: dict) -> tuple[float, float]:
         usd_balance = float(balance.get("free", {}).get("USD", 0.0))
-        eth_balance = float(balance.get("free", {}).get("ETH", 0.0))
+        btc_balance = float(balance.get("free", {}).get("XBT", balance.get("free", {}).get("BTC", 0.0)))
         if usd_balance == 0.0:
             usd_balance = float(balance.get("total", {}).get("USD", 0.0))
-        if eth_balance == 0.0:
-            eth_balance = float(balance.get("total", {}).get("ETH", 0.0))
-        return usd_balance, eth_balance
+        if btc_balance == 0.0:
+            btc_balance = float(balance.get("total", {}).get("XBT", balance.get("total", {}).get("BTC", 0.0)))
+        return usd_balance, btc_balance
 
-    def _get_portfolio_value(self, eth_balance: float, usd_balance: float, price: float) -> float:
-        return float((eth_balance * price) + usd_balance)
+    def _get_portfolio_value(self, btc_balance: float, usd_balance: float, price: float) -> float:
+        return float((btc_balance * price) + usd_balance)
 
     def _lag_price_vol(self, n: int, close_now: float, vol_now: float) -> tuple[float, float]:
         if n <= 16384:
@@ -407,75 +409,75 @@ class KrakenLiveEnv(gym.Env):
             ])
         return features
 
-    def _get_btc_features(self) -> list[float]:
+    def _get_eth_features(self) -> list[float]:
         try:
-            ticker = self.exchange.fetch_ticker("BTC/USD")
-            btc_price = float(ticker.get("last") or 0.0)
-            if btc_price <= 0.0:
-                return [0.0] * len(BTC_FEATURE_COLUMNS)
+            ticker = self.exchange.fetch_ticker("ETH/USD")
+            eth_price = float(ticker.get("last") or 0.0)
+            if eth_price <= 0.0:
+                return [0.0] * len(ETH_FEATURE_COLUMNS)
 
-            self.btc_prices.append(btc_price)
-            self.btc_prices_rsi.append(btc_price)
-            self.btc_prices_lr.append(btc_price)
+            self.eth_prices.append(eth_price)
+            self.eth_prices_rsi.append(eth_price)
+            self.eth_prices_lr.append(eth_price)
 
-            btc_return_1 = 0.0
-            btc_return_4 = 0.0
-            btc_return_16 = 0.0
-            if len(self.btc_prices) >= 2:
-                prev = float(self.btc_prices[-2])
-                btc_return_1 = (btc_price - prev) / (prev + 1e-8)
-            if len(self.btc_prices) >= 5:
-                prev = float(self.btc_prices[-5])
-                btc_return_4 = (btc_price - prev) / (prev + 1e-8)
-            if len(self.btc_prices) >= 17:
-                prev = float(self.btc_prices[-17])
-                btc_return_16 = (btc_price - prev) / (prev + 1e-8)
+            eth_return_1 = 0.0
+            eth_return_4 = 0.0
+            eth_return_16 = 0.0
+            if len(self.eth_prices) >= 2:
+                prev = float(self.eth_prices[-2])
+                eth_return_1 = (eth_price - prev) / (prev + 1e-8)
+            if len(self.eth_prices) >= 5:
+                prev = float(self.eth_prices[-5])
+                eth_return_4 = (eth_price - prev) / (prev + 1e-8)
+            if len(self.eth_prices) >= 17:
+                prev = float(self.eth_prices[-17])
+                eth_return_16 = (eth_price - prev) / (prev + 1e-8)
 
-            btc_series = pd.Series(list(self.btc_prices), dtype=np.float64)
-            btc_ema20 = float(EMAIndicator(close=btc_series, window=max(1, min(20, len(btc_series)))).ema_indicator().iloc[-1])
-            btc_ema20_dev = (btc_price / (btc_ema20 + 1e-8)) - 1.0
+            eth_series = pd.Series(list(self.eth_prices), dtype=np.float64)
+            eth_ema20 = float(EMAIndicator(close=eth_series, window=max(1, min(20, len(eth_series)))).ema_indicator().iloc[-1])
+            eth_ema20_dev = (eth_price / (eth_ema20 + 1e-8)) - 1.0
 
-            btc_rsi_norm = 0.0
-            if len(self.btc_prices_rsi) >= 14:
-                rsi_series = RSIIndicator(close=pd.Series(list(self.btc_prices_rsi), dtype=np.float64), window=14).rsi()
+            eth_rsi_norm = 0.0
+            if len(self.eth_prices_rsi) >= 14:
+                rsi_series = RSIIndicator(close=pd.Series(list(self.eth_prices_rsi), dtype=np.float64), window=14).rsi()
                 rsi_last = float(rsi_series.iloc[-1]) if not np.isnan(rsi_series.iloc[-1]) else 50.0
-                btc_rsi_norm = (rsi_last - 50.0) / 50.0
+                eth_rsi_norm = (rsi_last - 50.0) / 50.0
 
-            def eth_ret(lag: int) -> float:
+            def btc_ret(lag: int) -> float:
                 if len(self.df) < lag + 1:
                     return 0.0
-                prev_eth = float(self.df["close"].iloc[-(lag + 1)])
-                curr_eth = float(self.df["close"].iloc[-1])
-                return (curr_eth - prev_eth) / (prev_eth + 1e-8)
+                prev_btc = float(self.df["close"].iloc[-(lag + 1)])
+                curr_btc = float(self.df["close"].iloc[-1])
+                return (curr_btc - prev_btc) / (prev_btc + 1e-8)
 
-            btc_lr12_mid = 0.0
-            btc_lr12_upper = 0.0
-            if len(self.btc_prices_lr) >= 12:
-                y = np.array(list(self.btc_prices_lr)[-12:], dtype=np.float64)
+            eth_lr12_mid = 0.0
+            eth_lr12_upper = 0.0
+            if len(self.eth_prices_lr) >= 12:
+                y = np.array(list(self.eth_prices_lr)[-12:], dtype=np.float64)
                 x = np.arange(12, dtype=np.float64)
                 slope, intercept = np.polyfit(x, y, 1)
                 fit = (slope * x) + intercept
                 reg_now = float((slope * 11) + intercept)
                 resid_std = float(np.std(y - fit))
-                btc_lr12_mid = (reg_now - btc_price) / (btc_price + 1e-8)
-                btc_lr12_upper = ((reg_now + 2.0 * resid_std) - btc_price) / (btc_price + 1e-8)
+                eth_lr12_mid = (reg_now - eth_price) / (eth_price + 1e-8)
+                eth_lr12_upper = ((reg_now + 2.0 * resid_std) - eth_price) / (eth_price + 1e-8)
 
             return [
-                btc_return_1,
-                btc_return_4,
-                btc_return_16,
-                btc_ema20_dev,
-                btc_rsi_norm,
-                btc_return_1 - eth_ret(1),
-                btc_return_4 - eth_ret(4),
-                btc_return_16 - eth_ret(16),
-                btc_lr12_mid,
-                btc_lr12_upper,
+                eth_return_1,
+                eth_return_4,
+                eth_return_16,
+                eth_ema20_dev,
+                eth_rsi_norm,
+                eth_return_1 - btc_ret(1),
+                eth_return_4 - btc_ret(4),
+                eth_return_16 - btc_ret(16),
+                eth_lr12_mid,
+                eth_lr12_upper,
             ]
         except Exception:
-            return [0.0] * len(BTC_FEATURE_COLUMNS)
+            return [0.0] * len(ETH_FEATURE_COLUMNS)
 
-    def _compute_observation(self, usd_balance: float, eth_balance: float) -> np.ndarray:
+    def _compute_observation(self, usd_balance: float, btc_balance: float) -> np.ndarray:
         df = self.df.copy()
         if df.empty:
             return np.zeros((OBSERVATION_SIZE,), dtype=np.float32)
@@ -578,9 +580,9 @@ class KrakenLiveEnv(gym.Env):
         except Exception:
             order_book_features = [0.0] * 5
 
-        portfolio_total = max(self._get_portfolio_value(eth_balance, usd_balance, current_price), 1e-8)
+        portfolio_total = max(self._get_portfolio_value(btc_balance, usd_balance, current_price), 1e-8)
         portfolio_features = [
-            (eth_balance * current_price) / portfolio_total,
+            (btc_balance * current_price) / portfolio_total,
             usd_balance / portfolio_total,
         ]
 
@@ -606,7 +608,7 @@ class KrakenLiveEnv(gym.Env):
             np.cos(2 * np.pi * dom / 31.0),
         ]
 
-        btc_features = self._get_btc_features()
+        eth_features = self._get_eth_features()
 
         obs = np.array(
             price_lags
@@ -618,7 +620,7 @@ class KrakenLiveEnv(gym.Env):
             + portfolio_features
             + self_awareness
             + time_features
-            + btc_features,
+            + eth_features,
             dtype=np.float32,
         )
         obs = np.nan_to_num(obs, nan=0.0, posinf=1.0, neginf=-1.0)
@@ -634,15 +636,15 @@ class KrakenLiveEnv(gym.Env):
             "action_taken",
             "reward",
             "cumulative_reward",
-            "eth_price",
+            "btc_price",
             "portfolio_usd",
-            "eth_balance",
+            "btc_balance",
             "usd_balance",
         ] + FEATURE_COLUMNS
         with open(self.trading_log_path, "w", encoding="utf-8") as f:
             f.write(",".join(headers) + "\n")
 
-    def _append_log_row(self, action_raw: float, reward: float, eth_price: float, portfolio_usd: float, eth_balance: float, usd_balance: float, obs: np.ndarray) -> None:
+    def _append_log_row(self, action_raw: float, reward: float, btc_price: float, portfolio_usd: float, btc_balance: float, usd_balance: float, obs: np.ndarray) -> None:
         row = [
             datetime.now(timezone.utc).isoformat(),
             str(self.step_count),
@@ -650,9 +652,9 @@ class KrakenLiveEnv(gym.Env):
             self.last_action,
             f"{reward:.10f}",
             f"{self.cumulative_reward:.10f}",
-            f"{eth_price:.8f}",
+            f"{btc_price:.8f}",
             f"{portfolio_usd:.8f}",
-            f"{eth_balance:.8f}",
+            f"{btc_balance:.8f}",
             f"{usd_balance:.8f}",
         ] + [f"{float(x):.8f}" for x in obs]
         with open(self.trading_log_path, "a", encoding="utf-8") as f:
@@ -665,13 +667,13 @@ class KrakenLiveEnv(gym.Env):
             return float(fallback_price)
         return float(fill_price)
 
-    def _execute_limit_order(self, side: str, quoted_price: float, amount_eth: float) -> tuple[bool, float, bool]:
+    def _execute_limit_order(self, side: str, quoted_price: float, amount_btc: float) -> tuple[bool, float, bool]:
         """Return (filled, fill_price, canceled)."""
         try:
             if side == "buy":
-                order = self.exchange.create_limit_buy_order(self.symbol, amount_eth, quoted_price)
+                order = self.exchange.create_limit_buy_order(self.symbol, amount_btc, quoted_price)
             else:
-                order = self.exchange.create_limit_sell_order(self.symbol, amount_eth, quoted_price)
+                order = self.exchange.create_limit_sell_order(self.symbol, amount_btc, quoted_price)
 
             order_id = order.get("id")
             self.pending_order_id = order_id
@@ -780,13 +782,13 @@ class KrakenLiveEnv(gym.Env):
         balance = self._safe_fetch_balance()
         if balance is None:
             return self.last_obs.copy(), {}
-        usd_balance, eth_balance = self._extract_balances(balance)
+        usd_balance, btc_balance = self._extract_balances(balance)
 
-        obs = self._compute_observation(usd_balance, eth_balance)
+        obs = self._compute_observation(usd_balance, btc_balance)
         self.last_obs = obs
 
         price = float(self.df.iloc[-1]["close"]) if not self.df.empty else 0.0
-        total_usd = self._get_portfolio_value(eth_balance, usd_balance, price)
+        total_usd = self._get_portfolio_value(btc_balance, usd_balance, price)
         self.last_balance = total_usd
         self.prev_price = price
         self.starting_portfolio_usd = total_usd
@@ -797,9 +799,9 @@ class KrakenLiveEnv(gym.Env):
         self.position_entry_price = None
         self.position_entry_step = None
         self.pending_order_id = None
-        self.btc_prices.clear()
-        self.btc_prices_rsi.clear()
-        self.btc_prices_lr.clear()
+        self.eth_prices.clear()
+        self.eth_prices_rsi.clear()
+        self.eth_prices_lr.clear()
         self.kill_switch = False
         self.consecutive_errors = 0
 
@@ -829,7 +831,7 @@ class KrakenLiveEnv(gym.Env):
         balance_before = self._safe_fetch_balance()
         if balance_before is None:
             return self.last_obs.copy(), 0.0, self.kill_switch, True, {"action_taken": "hold", "api_error": True}
-        usd_balance, eth_balance = self._extract_balances(balance_before)
+        usd_balance, btc_balance = self._extract_balances(balance_before)
         current_price = float(self.df.iloc[-1]["close"])
 
         trade_filled = False
@@ -845,30 +847,30 @@ class KrakenLiveEnv(gym.Env):
             bids, asks = [], []
 
         if not self.kill_switch and bids and asks:
-            target_eth_alloc: Optional[float] = None
+            target_btc_alloc: Optional[float] = None
             if action_raw > 0.3:
-                target_eth_alloc = 1.0
+                target_btc_alloc = 1.0
             elif action_raw < -0.3:
-                target_eth_alloc = 0.0
+                target_btc_alloc = 0.0
 
-            eth_value = eth_balance * current_price
-            portfolio_usd_before = eth_value + usd_balance
-            eth_value_gap = 0.0
-            if target_eth_alloc is not None:
+            btc_value = btc_balance * current_price
+            portfolio_usd_before = btc_value + usd_balance
+            btc_value_gap = 0.0
+            if target_btc_alloc is not None:
                 alloc_diff_threshold = 0.10 * portfolio_usd_before
-                target_eth_value = portfolio_usd_before * target_eth_alloc
-                eth_value_gap = target_eth_value - eth_value
+                target_btc_value = portfolio_usd_before * target_btc_alloc
+                btc_value_gap = target_btc_value - btc_value
 
-            if target_eth_alloc is not None and portfolio_usd_before > 0 and abs(eth_value_gap) > alloc_diff_threshold:
-                if eth_value_gap > 0:
+            if target_btc_alloc is not None and portfolio_usd_before > 0 and abs(btc_value_gap) > alloc_diff_threshold:
+                if btc_value_gap > 0:
                     quote_price = float(bids[0][0])
-                    order_eth = eth_value_gap / max(quote_price, 1e-8)
-                    max_affordable_eth = usd_balance / max(quote_price * (1.0 + MAKER_FEE), 1e-8)
-                    order_eth = min(order_eth, max_affordable_eth)
-                    if order_eth >= self.min_order_eth:
-                        trade_filled, filled_price, canceled = self._execute_limit_order("buy", quote_price, order_eth)
+                    order_btc = btc_value_gap / max(quote_price, 1e-8)
+                    max_affordable_btc = usd_balance / max(quote_price * (1.0 + MAKER_FEE), 1e-8)
+                    order_btc = min(order_btc, max_affordable_btc)
+                    if order_btc >= self.min_order_btc:
+                        trade_filled, filled_price, canceled = self._execute_limit_order("buy", quote_price, order_btc)
                         if trade_filled:
-                            trade_value = order_eth * max(filled_price, 1e-8)
+                            trade_value = order_btc * max(filled_price, 1e-8)
                             self.last_action = "buy"
                             self.position_entry_price = filled_price
                             self.position_entry_step = self.step_count + 1
@@ -877,12 +879,12 @@ class KrakenLiveEnv(gym.Env):
                             forced_hold_reward = True
                 else:
                     quote_price = float(asks[0][0])
-                    desired_sell_eth = abs(eth_value_gap) / max(quote_price, 1e-8)
-                    order_eth = min(desired_sell_eth, eth_balance)
-                    if order_eth >= self.min_order_eth:
-                        trade_filled, filled_price, canceled = self._execute_limit_order("sell", quote_price, order_eth)
+                    desired_sell_btc = abs(btc_value_gap) / max(quote_price, 1e-8)
+                    order_btc = min(desired_sell_btc, btc_balance)
+                    if order_btc >= self.min_order_btc:
+                        trade_filled, filled_price, canceled = self._execute_limit_order("sell", quote_price, order_btc)
                         if trade_filled:
-                            trade_value = order_eth * max(filled_price, 1e-8)
+                            trade_value = order_btc * max(filled_price, 1e-8)
                             self.last_action = "sell"
                             self.position_entry_price = None
                             self.position_entry_step = None
@@ -893,20 +895,20 @@ class KrakenLiveEnv(gym.Env):
         balance_after = self._safe_fetch_balance()
         if balance_after is None:
             return self.last_obs.copy(), 0.0, self.kill_switch, True, {"action_taken": self.last_action, "api_error": True}
-        usd_balance, eth_balance = self._extract_balances(balance_after)
+        usd_balance, btc_balance = self._extract_balances(balance_after)
 
-        obs = self._compute_observation(usd_balance, eth_balance)
-        portfolio_usd = self._get_portfolio_value(eth_balance, usd_balance, current_price)
+        obs = self._compute_observation(usd_balance, btc_balance)
+        portfolio_usd = self._get_portfolio_value(btc_balance, usd_balance, current_price)
 
         reward = 0.0
         if not forced_hold_reward:
             prev_price = max(self.prev_price, 1e-8)
             price_change = (current_price - prev_price) / prev_price
-            eth_allocation = (eth_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0
+            btc_allocation = (btc_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0
             fee_if_traded = 0.0
             if trade_filled:
                 fee_if_traded = REWARD_FEE_RATE * trade_value / max(portfolio_usd, 1e-8)
-            reward = (2.0 * eth_allocation - 1.0) * price_change - fee_if_traded
+            reward = (2.0 * btc_allocation - 1.0) * price_change - fee_if_traded
         else:
             self.last_action = "hold"
 
@@ -925,15 +927,15 @@ class KrakenLiveEnv(gym.Env):
             )
             self.kill_switch = True
             terminated = True
-            self._append_log_row(action_raw, float(reward), current_price, portfolio_usd, eth_balance, usd_balance, obs)
+            self._append_log_row(action_raw, float(reward), current_price, portfolio_usd, btc_balance, usd_balance, obs)
             sys.exit(1)
 
-        self._append_log_row(action_raw, float(reward), current_price, portfolio_usd, eth_balance, usd_balance, obs)
+        self._append_log_row(action_raw, float(reward), current_price, portfolio_usd, btc_balance, usd_balance, obs)
 
         return obs, float(reward), terminated, False, {
             "action_taken": self.last_action,
             "portfolio_usd": portfolio_usd,
             "kill_switch": self.kill_switch,
             "fill_price": filled_price if trade_filled else None,
-            "eth_allocation": (eth_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0,
+            "btc_allocation": (btc_balance * current_price / portfolio_usd) if portfolio_usd > 0 else 0.0,
         }
