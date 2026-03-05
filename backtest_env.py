@@ -376,26 +376,31 @@ class KrakenBacktestEnv(gym.Env):
         willr_window: int = 14,
     ) -> tuple[np.ndarray, np.ndarray, float]:
         t0 = time.perf_counter()
-        high_arr = high.to_numpy(dtype=np.float64)
-        low_arr = low.to_numpy(dtype=np.float64)
-        close_arr = close.to_numpy(dtype=np.float64)
+        high_arr = np.ascontiguousarray(high.to_numpy(dtype=np.float64))
+        low_arr = np.ascontiguousarray(low.to_numpy(dtype=np.float64))
+        close_arr = np.ascontiguousarray(close.to_numpy(dtype=np.float64))
         typical = (high_arr + low_arr + close_arr) / 3.0
 
-        cci = np.full(len(typical), np.nan, dtype=np.float64)
-        if len(typical) >= cci_window:
-            cci_windows = np.lib.stride_tricks.sliding_window_view(typical, cci_window)
-            sma = cci_windows.mean(axis=1)
-            mad = np.mean(np.abs(cci_windows - sma[:, None]), axis=1)
+        n = len(close_arr)
+
+        cci = np.full(n, np.nan, dtype=np.float64)
+        if n >= cci_window:
+            cs_typical = np.concatenate(([0.0], np.cumsum(typical)))
+            sma = (cs_typical[cci_window:] - cs_typical[:-cci_window]) / cci_window
+
+            typical_windows = np.lib.stride_tricks.sliding_window_view(typical, cci_window)
+            mad = np.abs(typical_windows - sma[:, None]).mean(axis=1)
             cci_values = (typical[cci_window - 1 :] - sma) / ((0.015 * mad) + 1e-8)
             cci[cci_window - 1 :] = np.clip(cci_values / 200.0, -1.0, 1.0)
 
-        willr = np.full(len(close_arr), np.nan, dtype=np.float64)
-        if len(close_arr) >= willr_window:
+        willr = np.full(n, np.nan, dtype=np.float64)
+        if n >= willr_window:
             high_windows = np.lib.stride_tricks.sliding_window_view(high_arr, willr_window)
             low_windows = np.lib.stride_tricks.sliding_window_view(low_arr, willr_window)
             highest_high = high_windows.max(axis=1)
             lowest_low = low_windows.min(axis=1)
-            willr_values = ((highest_high - close_arr[willr_window - 1 :]) / ((highest_high - lowest_low) + 1e-8)) * -100.0
+            close_tail = close_arr[willr_window - 1 :]
+            willr_values = ((highest_high - close_tail) / ((highest_high - lowest_low) + 1e-8)) * -100.0
             willr[willr_window - 1 :] = (willr_values + 100.0) / 100.0
 
         elapsed = time.perf_counter() - t0
