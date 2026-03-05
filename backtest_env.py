@@ -425,7 +425,7 @@ class KrakenBacktestEnv(gym.Env):
         self.df["stoch_k_norm"] = stoch.stoch() / 100.0
         self.df["stoch_d_norm"] = stoch.stoch_signal() / 100.0
 
-        cci_20_clipped, willr_14_norm, cci_willr_seconds = self._compute_cci_williams_fast(
+        cci_20_clipped, willr_14_norm, _ = self._compute_cci_williams_fast(
             high=high,
             low=low,
             close=close,
@@ -434,10 +434,6 @@ class KrakenBacktestEnv(gym.Env):
         )
         self.df["cci_20_clipped"] = np.nan_to_num(cci_20_clipped, nan=0.0)
         self.df["willr_14_norm"] = np.nan_to_num(willr_14_norm, nan=0.0)
-        print(
-            f"[KrakenBacktestEnv] cci_williams_r block: {cci_willr_seconds:.4f}s "
-            f"(target < 0.1000s)"
-        )
 
         self.df["adx_14_norm"] = self._fast_adx(high, low, close, window=14)
 
