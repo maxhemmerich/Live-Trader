@@ -43,8 +43,8 @@ def _sharpe_ratio_approx(returns: list[float]) -> float:
 
 def _evaluate_pretrained_model(model: SAC, num_episodes: int = 20) -> str:
     eval_env = KrakenBacktestEnv(
-        csv_path="D:/ETHUSD_5.csv",
-        candle_interval=5,
+        csv_path="D:/XBTUSD_1.csv",
+        candle_interval=1,
         episode_length=5000,
         start_idx=None,
     )
@@ -252,8 +252,8 @@ def main() -> None:
 
     env = DummyVecEnv([
         lambda: KrakenBacktestEnv(
-            csv_path="D:/ETHUSD_5.csv",
-            candle_interval=5,
+            csv_path="D:/XBTUSD_1.csv",
+            candle_interval=1,
             episode_length=5000,
             start_idx=None,
         )
