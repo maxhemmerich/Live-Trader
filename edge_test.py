@@ -6,13 +6,16 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import time
 
 import numpy as np
+import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import accuracy_score, confusion_matrix
-
-from backtest_env import KrakenBacktestEnv
-
+from ta.momentum import RSIIndicator, StochasticOscillator
+from ta.trend import EMAIndicator, MACD
+from ta.volatility import AverageTrueRange, BollingerBands
+from ta.volume import OnBalanceVolumeIndicator
 
 BASE_COLUMNS = {"ts", "open", "high", "low", "close", "vol"}
 
@@ -28,28 +31,147 @@ class EdgeResult:
     top_features: list[tuple[str, float]]
 
 
-def build_dataset(csv_path: str, candle_interval: int) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    env = KrakenBacktestEnv(
-        csv_path=csv_path,
-        candle_interval=candle_interval,
-        episode_length=1,
-        max_buffer_rows=1,
-    )
+def _csv_has_header_row(csv_path: str) -> bool:
+    first_row = pd.read_csv(csv_path, nrows=1, header=None, dtype=str)
+    if first_row.empty:
+        return False
+    first_cell = str(first_row.iat[0, 0]).strip().lower().lstrip("\ufeff")
+    return first_cell in {"ts", "timestamp", "time", "datetime", "date"}
 
-    two_year_df = env.full_df.iloc[env.sample_start_idx :].copy().reset_index(drop=True)
-    env.df = two_year_df
-    env._precompute_indicators()
+
+def _compute_cci_williams_np(
+    high: np.ndarray,
+    low: np.ndarray,
+    close: np.ndarray,
+    cci_window: int = 20,
+    willr_window: int = 14,
+) -> tuple[np.ndarray, np.ndarray]:
+    typical = (high + low + close) / 3.0
+
+    cci = np.full(len(close), np.nan, dtype=np.float64)
+    if len(close) >= cci_window:
+        cci_windows = np.lib.stride_tricks.sliding_window_view(typical, cci_window)
+        sma = cci_windows.mean(axis=1)
+        mad = np.abs(cci_windows - sma[:, None]).mean(axis=1)
+        cci_values = (typical[cci_window - 1 :] - sma) / ((0.015 * mad) + 1e-8)
+        cci[cci_window - 1 :] = np.clip(cci_values / 200.0, -1.0, 1.0)
+
+    willr = np.full(len(close), np.nan, dtype=np.float64)
+    if len(close) >= willr_window:
+        high_windows = np.lib.stride_tricks.sliding_window_view(high, willr_window)
+        low_windows = np.lib.stride_tricks.sliding_window_view(low, willr_window)
+        highest_high = high_windows.max(axis=1)
+        lowest_low = low_windows.min(axis=1)
+        willr_raw = ((highest_high - close[willr_window - 1 :]) / ((highest_high - lowest_low) + 1e-8)) * -100.0
+        willr[willr_window - 1 :] = (willr_raw + 100.0) / 100.0
+
+    return cci, willr
+
+
+def build_lightweight_features(csv_path: str) -> pd.DataFrame:
+    skip_header_row = 1 if _csv_has_header_row(csv_path) else 0
+    df = pd.read_csv(
+        csv_path,
+        header=None,
+        names=["ts", "open", "high", "low", "close", "vol"],
+        skiprows=skip_header_row,
+        usecols=[0, 1, 2, 3, 4, 5],
+        dtype={
+            "ts": np.int64,
+            "open": np.float32,
+            "high": np.float32,
+            "low": np.float32,
+            "close": np.float32,
+            "vol": np.float32,
+        },
+    )
+    if df.empty:
+        return df
+
+    ts_scale = 1000 if int(df["ts"].median()) < 10**12 else 1
+    df["ts"] = df["ts"] * ts_scale
+    two_years_ms = int(2 * 365 * 24 * 60 * 60 * 1000)
+    sample_cutoff_ts = int(df["ts"].max()) - two_years_ms
+    df = df[df["ts"] >= sample_cutoff_ts].copy().reset_index(drop=True)
+
+    close = df["close"].astype(np.float64)
+    high = df["high"].astype(np.float64)
+    low = df["low"].astype(np.float64)
+    vol = df["vol"].astype(np.float64)
+
+    df["rsi_7_norm"] = RSIIndicator(close=close, window=7).rsi() / 100.0
+    df["rsi_14_norm"] = RSIIndicator(close=close, window=14).rsi() / 100.0
+    df["rsi_21_norm"] = RSIIndicator(close=close, window=21).rsi() / 100.0
+
+    stoch = StochasticOscillator(high=high, low=low, close=close, window=14, smooth_window=3)
+    df["stoch_k_norm"] = stoch.stoch() / 100.0
+    df["stoch_d_norm"] = stoch.stoch_signal() / 100.0
+
+    cci_20_clipped, willr_14_norm = _compute_cci_williams_np(
+        high=high.to_numpy(dtype=np.float64),
+        low=low.to_numpy(dtype=np.float64),
+        close=close.to_numpy(dtype=np.float64),
+        cci_window=20,
+        willr_window=14,
+    )
+    df["cci_20_clipped"] = np.nan_to_num(cci_20_clipped, nan=0.0)
+    df["willr_14_norm"] = np.nan_to_num(willr_14_norm, nan=0.0)
+
+    bb20 = BollingerBands(close=close, window=20, window_dev=2)
+    bb50 = BollingerBands(close=close, window=50, window_dev=2)
+    atr14 = AverageTrueRange(high=high, low=low, close=close, window=14).average_true_range()
+    ema9 = EMAIndicator(close=close, window=9).ema_indicator()
+    ema20 = EMAIndicator(close=close, window=20).ema_indicator()
+    ema50 = EMAIndicator(close=close, window=50).ema_indicator()
+    ema200 = EMAIndicator(close=close, window=200).ema_indicator()
+    macd_hist = MACD(close=close, window_fast=12, window_slow=26, window_sign=9).macd_diff()
+    obv = OnBalanceVolumeIndicator(close=close, volume=vol).on_balance_volume()
+
+    df["bb20_p"] = bb20.bollinger_pband()
+    df["atr_14_over_price"] = atr14 / (close + 1e-8)
+    df["realized_vol_20_norm"] = close.pct_change().rolling(20).std() / 0.02
+    df["ema9"] = (close / (ema9 + 1e-8)) - 1.0
+    df["ema20"] = (close / (ema20 + 1e-8)) - 1.0
+    df["ema50"] = (close / (ema50 + 1e-8)) - 1.0
+    df["ema200"] = (close / (ema200 + 1e-8)) - 1.0
+    df["macd_hist_atr"] = macd_hist / (atr14 + 1e-8)
+    df["bb20_width_price"] = (bb20.bollinger_hband() - bb20.bollinger_lband()) / (close + 1e-8)
+    df["bb50_width_price"] = (bb50.bollinger_hband() - bb50.bollinger_lband()) / (close + 1e-8)
+    df["obv_pct_change"] = obv.pct_change()
+
+    vol20 = vol.rolling(20).mean().replace(0.0, np.nan)
+    spread = (high - low) / (close + 1e-8)
+    spread_mean20 = spread.rolling(20).mean().replace(0.0, np.nan)
+    df["bid_ask_spread_frac"] = (spread / (spread_mean20 + 1e-8)).clip(-1.0, 1.0).fillna(0.0)
+    df["bid_depth_5_over_vol20"] = ((vol * 0.5) / (vol20 + 1e-8)).clip(-1.0, 1.0).fillna(0.0)
+    df["ask_depth_5_over_vol20"] = ((vol * 0.5) / (vol20 + 1e-8)).clip(-1.0, 1.0).fillna(0.0)
+    imbalance = (((close - low) / ((high - low) + 1e-8)) * 2.0) - 1.0
+    df["bid_ask_imbalance"] = imbalance.clip(-1.0, 1.0).fillna(0.0)
+    df["price_dist_best_bid"] = ((close - low) / (close + 1e-8)).clip(-1.0, 1.0).fillna(0.0)
+
+    df["eth_return_1"] = close.pct_change(1).fillna(0.0)
+    df["eth_return_4"] = close.pct_change(4).fillna(0.0)
+    df["eth_return_16"] = close.pct_change(16).fillna(0.0)
+
+    return df
+
+
+def build_dataset(csv_path: str, candle_interval: int) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    _ = candle_interval
+    t0 = time.perf_counter()
+    features_source = build_lightweight_features(csv_path)
+    print(f"[edge_test] Lightweight feature build completed in {time.perf_counter() - t0:.2f}s")
 
     feature_columns = [
         col
-        for col in env.df.columns
+        for col in features_source.columns
         if col not in BASE_COLUMNS
     ]
 
-    features_df = env.df[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    features_df = features_source[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
-    next_close = env.df["close"].shift(-1)
-    labels = (next_close > env.df["close"]).astype(int)
+    next_close = features_source["close"].shift(-1)
+    labels = (next_close > features_source["close"]).astype(int)
 
     features_df = features_df.iloc[:-1].reset_index(drop=True)
     labels = labels.iloc[:-1].to_numpy(dtype=np.int32)
