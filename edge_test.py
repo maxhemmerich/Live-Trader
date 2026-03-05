@@ -24,7 +24,9 @@ MIN_REQUIRED_ROWS = 1000
 @dataclass
 class EdgeResult:
     csv_path: str
+    instrument_label: str
     timeframe_label: str
+    quote_currency: str
     samples: int
     train_samples: int
     test_samples: int
@@ -69,7 +71,44 @@ def _compute_cci_williams_np(
     return cci, willr
 
 
-def build_lightweight_features(csv_path: str) -> pd.DataFrame:
+def _detect_quote_currency(csv_path: str) -> str:
+    return "EUR" if "EUR" in Path(csv_path).stem.upper() else "USD"
+
+
+def _load_close_returns(csv_path: str) -> pd.DataFrame:
+    skip_header_row = 1 if _csv_has_header_row(csv_path) else 0
+    close_df = pd.read_csv(
+        csv_path,
+        header=None,
+        names=["ts", "close"],
+        skiprows=skip_header_row,
+        usecols=[0, 4],
+        dtype={"ts": np.int64, "close": np.float32},
+    )
+    if close_df.empty:
+        return close_df
+
+    ts_scale = 1000 if int(close_df["ts"].median()) < 10**12 else 1
+    close_df["ts"] = close_df["ts"] * ts_scale
+    close_df["return_1"] = close_df["close"].pct_change(1).fillna(0.0)
+    return close_df[["ts", "return_1"]]
+
+
+def _find_btc_eur_csv(csv_path: str) -> str | None:
+    src = Path(csv_path)
+    timeframe_token = _extract_timeframe_token(str(src))
+    patterns = ["*XBT*EUR*.csv", "*BTC*EUR*.csv"]
+    for pattern in patterns:
+        for candidate in sorted(src.parent.glob(pattern)):
+            if candidate == src:
+                continue
+            if timeframe_token and _extract_timeframe_token(str(candidate)) != timeframe_token:
+                continue
+            return str(candidate)
+    return None
+
+
+def build_lightweight_features(csv_path: str, quote_currency: str = "USD") -> pd.DataFrame:
     skip_header_row = 1 if _csv_has_header_row(csv_path) else 0
     df = pd.read_csv(
         csv_path,
@@ -150,7 +189,14 @@ def build_lightweight_features(csv_path: str) -> pd.DataFrame:
     df["bid_ask_imbalance"] = imbalance.clip(-1.0, 1.0).fillna(0.0)
     df["price_dist_best_bid"] = ((close - low) / (close + 1e-8)).clip(-1.0, 1.0).fillna(0.0)
 
-    df["eth_return_1"] = close.pct_change(1).fillna(0.0)
+    if quote_currency != "EUR":
+        df["eth_return_1"] = close.pct_change(1).fillna(0.0)
+    else:
+        btc_eur_csv = _find_btc_eur_csv(csv_path)
+        if btc_eur_csv:
+            btc_eur_returns = _load_close_returns(btc_eur_csv).rename(columns={"return_1": "btc_eur_return_1"})
+            df = df.merge(btc_eur_returns, on="ts", how="left")
+            df["btc_eur_return_1"] = df["btc_eur_return_1"].fillna(0.0)
     df["eth_return_4"] = close.pct_change(4).fillna(0.0)
     df["eth_return_16"] = close.pct_change(16).fillna(0.0)
 
@@ -168,7 +214,8 @@ def build_dataset(csv_path: str, candle_interval: int) -> tuple[np.ndarray, np.n
         return np.empty((0, 0), dtype=np.float32), np.empty((0,), dtype=np.int32), []
 
     t0 = time.perf_counter()
-    features_source = build_lightweight_features(csv_path)
+    quote_currency = _detect_quote_currency(csv_path)
+    features_source = build_lightweight_features(csv_path, quote_currency=quote_currency)
     print(f"[edge_test] Lightweight feature build completed in {time.perf_counter() - t0:.2f}s")
 
     feature_columns = [
@@ -204,6 +251,11 @@ def _extract_timeframe_token(path: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _instrument_from_path(path: str) -> str:
+    stem = Path(path).stem
+    return re.sub(r"_\d+$", "", stem)
+
+
 def parse_timeframe(timeframe: str | None, csv_path: str | None = None) -> tuple[int, str]:
     if timeframe:
         token = timeframe.strip().lower()
@@ -231,6 +283,8 @@ def parse_timeframe(timeframe: str | None, csv_path: str | None = None) -> tuple
 
 def run_edge_test(csv_path: str, candle_interval: int, timeframe_label: str) -> EdgeResult | None:
     X, y, feature_columns = build_dataset(csv_path, candle_interval)
+    quote_currency = _detect_quote_currency(csv_path)
+    instrument_label = f"{_instrument_from_path(csv_path)}_{timeframe_label}"
     if X.size == 0 or y.size == 0:
         return None
 
@@ -262,7 +316,9 @@ def run_edge_test(csv_path: str, candle_interval: int, timeframe_label: str) -> 
 
     return EdgeResult(
         csv_path=csv_path,
+        instrument_label=instrument_label,
         timeframe_label=timeframe_label,
+        quote_currency=quote_currency,
         samples=len(X),
         train_samples=len(X_train),
         test_samples=len(X_test),
@@ -273,7 +329,13 @@ def run_edge_test(csv_path: str, candle_interval: int, timeframe_label: str) -> 
 
 def find_default_csv_jobs(default_dir: str = "D:/") -> list[tuple[str, int, str]]:
     base = Path(default_dir)
-    candidates = sorted(base.glob("*USD*.csv"))
+    candidates = sorted(
+        {
+            *base.glob("*USD*.csv"),
+            *base.glob("*EUR*.csv"),
+            *base.glob("*EURX*.csv"),
+        }
+    )
     jobs: list[tuple[str, int, str]] = []
     for path in candidates:
         token = _extract_timeframe_token(str(path))
@@ -293,10 +355,10 @@ def print_ranked_summary(results: list[EdgeResult]) -> None:
     print("\n" + "#" * 88)
     print("Final ranking by test accuracy (descending)")
     print("#" * 88)
-    print(f"{'Rank':<6}{'Accuracy':<12}{'Timeframe':<12}{'Samples':<12}{'CSV'}")
+    print(f"{'Rank':<6}{'Accuracy':<12}{'Pair/TF':<30}{'Quote':<8}{'Samples':<12}{'CSV'}")
     for rank, result in enumerate(ranked, start=1):
         print(
-            f"{rank:<6}{result.accuracy:<12.4f}{result.timeframe_label:<12}"
+            f"{rank:<6}{result.accuracy:<12.4f}{result.instrument_label:<30}{result.quote_currency:<8}"
             f"{result.samples:<12,}{result.csv_path}"
         )
 
@@ -306,7 +368,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--csv",
         default=None,
-        help="Path to CSV file for a single run. If omitted, runs a sweep over D:/*USD*.csv.",
+        help="Path to CSV file for a single run. If omitted, runs a sweep over D:/*USD*.csv and D:/*EUR*.csv.",
     )
     parser.add_argument(
         "--timeframe",
@@ -329,7 +391,7 @@ if __name__ == "__main__":
         jobs = find_default_csv_jobs("D:/")
         if not jobs:
             raise FileNotFoundError(
-                "No files matching D:/*USD*.csv with timeframe suffix were found."
+                "No files matching D:/*USD*.csv, D:/*EUR*.csv, or D:/*EURX*.csv with timeframe suffix were found."
             )
         for csv_path, interval, label in jobs:
             result = run_edge_test(csv_path, interval, label)
