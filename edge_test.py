@@ -18,6 +18,7 @@ from ta.volatility import AverageTrueRange, BollingerBands
 from ta.volume import OnBalanceVolumeIndicator
 
 BASE_COLUMNS = {"ts", "open", "high", "low", "close", "vol"}
+MIN_REQUIRED_ROWS = 1000
 
 
 @dataclass
@@ -158,6 +159,14 @@ def build_lightweight_features(csv_path: str) -> pd.DataFrame:
 
 def build_dataset(csv_path: str, candle_interval: int) -> tuple[np.ndarray, np.ndarray, list[str]]:
     _ = candle_interval
+    skip_header_row = 1 if _csv_has_header_row(csv_path) else 0
+    raw_rows = pd.read_csv(csv_path, header=None, skiprows=skip_header_row, usecols=[0]).shape[0]
+    if raw_rows < MIN_REQUIRED_ROWS:
+        print(
+            f"[edge_test] Skipping {csv_path}: insufficient data ({raw_rows} rows, minimum {MIN_REQUIRED_ROWS} required)."
+        )
+        return np.empty((0, 0), dtype=np.float32), np.empty((0,), dtype=np.int32), []
+
     t0 = time.perf_counter()
     features_source = build_lightweight_features(csv_path)
     print(f"[edge_test] Lightweight feature build completed in {time.perf_counter() - t0:.2f}s")
@@ -220,8 +229,10 @@ def parse_timeframe(timeframe: str | None, csv_path: str | None = None) -> tuple
     return minutes, _format_timeframe_label(minutes)
 
 
-def run_edge_test(csv_path: str, candle_interval: int, timeframe_label: str) -> EdgeResult:
+def run_edge_test(csv_path: str, candle_interval: int, timeframe_label: str) -> EdgeResult | None:
     X, y, feature_columns = build_dataset(csv_path, candle_interval)
+    if X.size == 0 or y.size == 0:
+        return None
 
     split_idx = int(len(X) * 0.7)
     X_train, X_test = X[:split_idx], X[split_idx:]
@@ -311,7 +322,9 @@ if __name__ == "__main__":
 
     if args.csv:
         interval, label = parse_timeframe(args.timeframe, args.csv)
-        all_results.append(run_edge_test(args.csv, interval, label))
+        result = run_edge_test(args.csv, interval, label)
+        if result is not None:
+            all_results.append(result)
     else:
         jobs = find_default_csv_jobs("D:/")
         if not jobs:
@@ -319,6 +332,8 @@ if __name__ == "__main__":
                 "No files matching D:/*USD*.csv with timeframe suffix were found."
             )
         for csv_path, interval, label in jobs:
-            all_results.append(run_edge_test(csv_path, interval, label))
+            result = run_edge_test(csv_path, interval, label)
+            if result is not None:
+                all_results.append(result)
 
     print_ranked_summary(all_results)
