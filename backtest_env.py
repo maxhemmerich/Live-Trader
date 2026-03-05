@@ -100,6 +100,15 @@ from env import (
 )
 
 
+def _csv_has_header_row(csv_path: str) -> bool:
+    """Detect whether the CSV starts with a textual header row."""
+    first_row = pd.read_csv(csv_path, nrows=1, header=None, dtype=str)
+    if first_row.empty:
+        return False
+    first_cell = str(first_row.iat[0, 0]).strip().lower().lstrip("\ufeff")
+    return first_cell in {"ts", "timestamp", "time", "datetime", "date"}
+
+
 class KrakenBacktestEnv(gym.Env):
     """Gymnasium-compatible historical backtest environment with live-env feature parity."""
 
@@ -140,10 +149,12 @@ class KrakenBacktestEnv(gym.Env):
         ]
 
         load_start_time = time.perf_counter()
+        skip_header_row = 1 if _csv_has_header_row(self.csv_path) else 0
         self.full_df = pd.read_csv(
             self.csv_path,
             header=None,
-            names=["ts", "open", "high", "low", "close", "vol", "trades"],
+            names=["ts", "open", "high", "low", "close", "vol"],
+            skiprows=skip_header_row,
             dtype={
                 "ts": np.int64,
                 "open": np.float32,
@@ -151,9 +162,8 @@ class KrakenBacktestEnv(gym.Env):
                 "low": np.float32,
                 "close": np.float32,
                 "vol": np.float32,
-                "trades": np.int32,
             },
-            usecols=["ts", "open", "high", "low", "close", "vol"],
+            usecols=[0, 1, 2, 3, 4, 5],
         )
         ts_unit = self._timestamp_unit(self.full_df["ts"])
         two_years_delta = self._two_year_cutoff_delta(ts_unit)
