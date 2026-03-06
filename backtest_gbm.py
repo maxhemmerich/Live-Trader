@@ -10,6 +10,7 @@ CSV_PATH = "D:/XBTUSD_1.csv"
 FEE_RATE = 0.0026
 START_CASH = 100.0
 BARS_PER_YEAR = 365 * 24 * 60
+MIN_HOLD_BARS = 5
 
 
 def prepare_dataset(csv_path: str) -> tuple[pd.DataFrame, pd.Series, pd.Series, list[str]]:
@@ -71,8 +72,25 @@ def main() -> None:
     price_returns = np.diff(prices) / prices[:-1]
     prob_up = prob_up[:-1]
 
+    prob_min = float(prob_up.min())
+    prob_max = float(prob_up.max())
+    prob_mean = float(prob_up.mean())
+    prob_median = float(np.median(prob_up))
+    pct_above = float((prob_up > 0.58).mean()) * 100.0
+    pct_below = float((prob_up < 0.42).mean()) * 100.0
+    pct_between = float(((prob_up >= 0.42) & (prob_up <= 0.58)).mean()) * 100.0
+
     target = np.where(prob_up > 0.58, 1.0, np.where(prob_up < 0.42, 0.0, np.nan))
-    allocation = pd.Series(target).ffill().fillna(0.5).to_numpy(dtype=float)
+    desired_allocation = pd.Series(target).ffill().fillna(0.5).to_numpy(dtype=float)
+
+    allocation = desired_allocation.copy()
+    last_trade_idx = -10**9
+    for i in range(1, len(allocation)):
+        if allocation[i] != allocation[i - 1]:
+            if i - last_trade_idx <= MIN_HOLD_BARS:
+                allocation[i] = allocation[i - 1]
+            else:
+                last_trade_idx = i
 
     trades = np.diff(np.concatenate([[allocation[0]], allocation])) != 0
     n_trades = int(trades.sum())
@@ -102,6 +120,15 @@ def main() -> None:
     print(f"Max drawdown: {mdd * 100:.2f}%")
     print(f"Number of trades: {n_trades}")
     print(f"Buy & hold BTC return (same period): {bh_return * 100:.2f}%")
+    print(
+        f"prob_up distribution -> min: {prob_min:.4f}, max: {prob_max:.4f}, "
+        f"mean: {prob_mean:.4f}, median: {prob_median:.4f}"
+    )
+    print(
+        f"prob_up threshold hits -> >0.58: {pct_above:.2f}%, "
+        f"<0.42: {pct_below:.2f}%, between [0.42, 0.58]: {pct_between:.2f}%"
+    )
+    print(f"Average prob_up: {prob_mean:.4f}")
     print(f"Average allocation: {avg_allocation:.4f}")
     print(f"Allocation long (1.0): {pct_long:.2f}%")
     print(f"Allocation short (0.0): {pct_short:.2f}%")
