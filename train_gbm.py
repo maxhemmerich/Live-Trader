@@ -16,6 +16,7 @@ MODEL_PATH = Path("./checkpoints/gbm_model.pkl")
 
 def build_training_frame(csv_path: str) -> tuple[pd.DataFrame, pd.Series, list[str]]:
     features_source = build_lightweight_features(csv_path, quote_currency="USD")
+    print(f"[gbm] Loaded {len(features_source)} rows")
 
     start_2024 = int(pd.Timestamp("2024-01-01", tz="UTC").timestamp() * 1000)
     features_source = features_source[features_source["ts"] >= start_2024].copy().reset_index(drop=True)
@@ -28,6 +29,7 @@ def build_training_frame(csv_path: str) -> tuple[pd.DataFrame, pd.Series, list[s
 
     features_df = features_df.iloc[:-1].reset_index(drop=True)
     labels = labels.iloc[:-1].reset_index(drop=True)
+    print(f"[gbm] Features built: {len(features_df)} samples, {len(feature_columns)} features")
     return features_df, labels, feature_columns
 
 
@@ -41,6 +43,7 @@ def main() -> None:
     y_train = y.iloc[:split_idx]
     X_test = X_df.iloc[split_idx:]
     y_test = y.iloc[split_idx:]
+    print(f"[gbm] Training on {len(X_train)} samples, testing on {len(X_test)} samples")
 
     model = GradientBoostingClassifier(
         n_estimators=500,
@@ -48,6 +51,7 @@ def main() -> None:
         learning_rate=0.05,
         subsample=0.8,
         random_state=42,
+        verbose=1,
     )
     model.fit(X_train, y_train)
 
@@ -70,8 +74,8 @@ def main() -> None:
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump({"model": model, "feature_columns": feature_columns}, MODEL_PATH)
+    print("[gbm] Model saved to ./checkpoints/gbm_model.pkl")
 
-    print(f"Saved GBM model: {MODEL_PATH.resolve()}")
     print(f"Train accuracy: {train_acc:.4f}")
     print(f"Test accuracy:  {test_acc:.4f}")
     print("Top 10 feature importances:")
