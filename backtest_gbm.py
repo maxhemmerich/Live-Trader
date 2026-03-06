@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
 
 from edge_test import BASE_COLUMNS, build_lightweight_features
 
@@ -14,6 +14,7 @@ BARS_PER_YEAR = 365 * 24 * 60
 
 def prepare_dataset(csv_path: str) -> tuple[pd.DataFrame, pd.Series, pd.Series, list[str]]:
     src = build_lightweight_features(csv_path, quote_currency="USD")
+    print(f"[backtest] Loaded {len(src)} rows")
     feature_columns = [c for c in src.columns if c not in BASE_COLUMNS]
 
     X = src[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
@@ -23,6 +24,7 @@ def prepare_dataset(csv_path: str) -> tuple[pd.DataFrame, pd.Series, pd.Series, 
     X = X.iloc[:-1].reset_index(drop=True)
     y = y.iloc[:-1].reset_index(drop=True)
     prices = prices.iloc[:-1].reset_index(drop=True)
+    print("[backtest] Features built")
     return X, y, prices, feature_columns
 
 
@@ -48,15 +50,16 @@ def main() -> None:
     X_train, y_train = X.iloc[:split_idx], y.iloc[:split_idx]
     X_test, y_test = X.iloc[split_idx:], y.iloc[split_idx:]
     prices_test = prices.iloc[split_idx:].reset_index(drop=True)
+    print("[backtest] Training GBM...")
 
-    model = GradientBoostingClassifier(
-        n_estimators=500,
+    model = HistGradientBoostingClassifier(
+        max_iter=500,
         max_depth=4,
         learning_rate=0.05,
-        subsample=0.8,
         random_state=42,
     )
     model.fit(X_train, y_train)
+    print("[backtest] GBM trained, running backtest simulation...")
 
     cash = START_CASH
     btc = 0.0
@@ -68,9 +71,13 @@ def main() -> None:
     step_returns: list[float] = []
     prev_equity = START_CASH
 
-    for i in range(len(X_test)):
+    total_bars = len(X_test)
+    for i in range(total_bars):
         price = float(prices_test.iloc[i])
         prob_up = float(model.predict_proba(X_test.iloc[[i]])[0, 1])
+
+        if (i + 1) % 100_000 == 0:
+            print(f"[backtest] Simulated {i + 1}/{total_bars} bars...")
 
         if prob_up > 0.58:
             target_btc_alloc = 1.0
@@ -123,6 +130,7 @@ def main() -> None:
     buy_hold_final = START_CASH * (float(prices_test.iloc[-1]) / float(prices_test.iloc[0])) if len(prices_test) > 1 else START_CASH
     buy_hold_return = ((buy_hold_final / START_CASH) - 1.0) * 100.0
 
+    print("[backtest] Results:")
     print(f"Final portfolio value: ${final_value:.2f}")
     print(f"Total return: {total_return:.2f}%")
     print(f"Annualized return: {annualized:.2f}%")
