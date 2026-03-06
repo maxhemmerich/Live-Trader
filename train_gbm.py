@@ -5,7 +5,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.metrics import accuracy_score
 
 from edge_test import BASE_COLUMNS, build_lightweight_features
@@ -45,11 +45,16 @@ def main() -> None:
     y_test = y.iloc[split_idx:]
     print(f"[gbm] Training on {len(X_train)} samples, testing on {len(X_test)} samples")
 
-    model = GradientBoostingClassifier(
-        n_estimators=500,
-        max_depth=4,
+    model = HistGradientBoostingClassifier(
+        max_iter=300,
+        max_depth=8,
         learning_rate=0.05,
-        subsample=0.8,
+        min_samples_leaf=64,
+        l2_regularization=0.1,
+        early_stopping=True,
+        validation_fraction=0.1,
+        n_iter_no_change=15,
+        tol=1e-4,
         random_state=42,
         verbose=1,
     )
@@ -59,9 +64,6 @@ def main() -> None:
     test_preds = model.predict(X_test)
     train_acc = accuracy_score(y_train, train_preds)
     test_acc = accuracy_score(y_test, test_preds)
-
-    importances = sorted(zip(feature_columns, model.feature_importances_), key=lambda x: x[1], reverse=True)
-    top10 = importances[:10]
 
     test_probs = model.predict_proba(X_test)[:, 1]
     up_mask = test_probs > 0.60
@@ -78,9 +80,10 @@ def main() -> None:
 
     print(f"Train accuracy: {train_acc:.4f}")
     print(f"Test accuracy:  {test_acc:.4f}")
-    print("Top 10 feature importances:")
-    for rank, (name, score) in enumerate(top10, start=1):
-        print(f"  {rank:2d}. {name:<28} {score:.6f}")
+    print(
+        "Feature importance report: skipped for HistGradientBoostingClassifier "
+        "(no native feature_importances_ attribute)."
+    )
 
     if np.isnan(calibration):
         print("Calibration @ prob_up > 0.60: no qualifying predictions")
