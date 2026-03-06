@@ -209,10 +209,13 @@ initial_portfolio    = float(df.iloc[0]["portfolio_usd"])
 total_pnl            = portfolio_value - initial_portfolio
 pnl_pct              = (total_pnl / initial_portfolio) * 100.0 if initial_portfolio != 0 else 0.0
 current_action   = latest["action_taken"]
-current_price    = latest["eth_price"]
+price_col = "eth_price" if "eth_price" in df.columns else "btc_price"
+current_price    = latest[price_col]
 total_steps      = len(df)
-eth_balance      = latest["eth_balance"]
+eth_balance_col = "eth_balance" if "eth_balance" in df.columns else "btc_balance"
+eth_balance      = latest[eth_balance_col]
 usd_balance      = latest["usd_balance"]
+current_prob_up = float(latest["prob_up"]) if "prob_up" in df.columns else float("nan")
 
 if portfolio_value > 0:
     eth_allocation_pct = ((eth_balance * current_price) / portfolio_value) * 100.0
@@ -280,7 +283,7 @@ col3.metric(
     value = f"{current_action}",
 )
 col4.metric(
-    label = "Last Price (ETH/USD)",
+    label = f"Last Price ({'ETH/USD' if price_col == 'eth_price' else 'XBT/USD'})",
     value = f"${current_price:,.2f}",
 )
 col5.metric(
@@ -290,7 +293,7 @@ col5.metric(
 
 st.markdown("<div style='height: 0.75rem;'></div>", unsafe_allow_html=True)
 
-col6, col7, col8, col9, col10, col11, col12, col13 = st.columns(8)
+col6, col7, col8, col9, col10, col11, col12, col13, col14 = st.columns(9)
 
 learning_health = "No Data"
 learning_health_detail = "Need at least 10 SAC actor-loss points"
@@ -341,6 +344,10 @@ col13.metric(
     label = "PnL Today",
     value = f"${pnl_today:+,.2f}",
 )
+col14.metric(
+    label="Current GBM Confidence",
+    value=(f"{current_prob_up * 100:.2f}%" if np.isfinite(current_prob_up) else "N/A"),
+)
 
 st.metric(
     label="Learning Health",
@@ -355,7 +362,7 @@ df_plot = df.copy()
 if "global_step" not in df_plot.columns:
     df_plot["global_step"] = range(len(df_plot))
 df_plot["eth_allocation_pct"] = (
-    (df_plot["eth_balance"] * df_plot["eth_price"]) / df_plot["portfolio_usd"].replace(0, pd.NA)
+    (df_plot[eth_balance_col] * df_plot[price_col]) / df_plot["portfolio_usd"].replace(0, pd.NA)
 ) * 100.0
 df_plot["eth_allocation_pct"] = df_plot["eth_allocation_pct"].fillna(0.0)
 df_plot["action_smoothed"] = df_plot["action_raw"].rolling(window=20, min_periods=1).mean()
@@ -368,7 +375,7 @@ df_plot["portfolio_pct_change"] = (
     (df_plot["portfolio_usd"] / df_plot["portfolio_usd"].iloc[0]) - 1
 ) * 100.0
 df_plot["eth_buy_hold_pct_change"] = (
-    (df_plot["eth_price"] / df_plot["eth_price"].iloc[0]) - 1
+    (df_plot[price_col] / df_plot[price_col].iloc[0]) - 1
 ) * 100.0
 
 bot_pct_change = float(df_plot["portfolio_pct_change"].iloc[-1])
@@ -415,7 +422,7 @@ fig2 = make_subplots(specs=[[{"secondary_y": True}]])
 fig2.add_trace(
     go.Scatter(
         x=df_plot["global_step"],
-        y=df_plot["eth_price"],
+        y=df_plot[price_col],
         name="ETH/USD",
         line=dict(color="#1f77b4", width=2),
     ),
@@ -430,7 +437,7 @@ fig2.add_trace(
     ),
     secondary_y=True,
 )
-fig2.update_layout(title="ETH Price vs Portfolio ETH Allocation")
+fig2.update_layout(title="Asset Price vs Portfolio Crypto Allocation")
 fig2.update_xaxes(title_text="Global Step")
 fig2.update_yaxes(title_text="ETH/USD Price", secondary_y=False)
 fig2.update_yaxes(title_text="ETH Allocation (%)", secondary_y=True)
@@ -440,7 +447,7 @@ fig3 = make_subplots(specs=[[{"secondary_y": True}]])
 fig3.add_trace(
     go.Scatter(
         x=df_plot["global_step"],
-        y=df_plot["eth_price"],
+        y=df_plot[price_col],
         name="ETH/USD",
         line=dict(color="#1f77b4", width=2),
     ),
@@ -465,7 +472,7 @@ fig3.add_trace(
     ),
     secondary_y=True,
 )
-fig3.update_layout(title="ETH Price vs Action Signal")
+fig3.update_layout(title="Asset Price vs Action Signal")
 fig3.update_xaxes(title_text="Global Step")
 fig3.update_yaxes(title_text="ETH/USD Price", secondary_y=False)
 fig3.update_yaxes(title_text="Action Signal", secondary_y=True, range=[-1, 1])
@@ -475,7 +482,7 @@ fig4 = make_subplots(specs=[[{"secondary_y": True}]])
 fig4.add_trace(
     go.Scatter(
         x=df_plot["global_step"],
-        y=df_plot["eth_price"],
+        y=df_plot[price_col],
         name="ETH Price",
         line=dict(color="#1f77b4", width=2),
     ),
@@ -500,13 +507,41 @@ fig4.add_trace(
     secondary_y=True,
 )
 fig4.update_layout(
-    title="ETH Price, Portfolio Value & ETH Allocation",
+    title="Asset Price, Portfolio Value & Crypto Allocation",
     showlegend=True,
 )
 fig4.update_xaxes(title_text="Global Step")
 fig4.update_yaxes(title_text="ETH/USD Price", secondary_y=False)
 fig4.update_yaxes(title_text="Portfolio Value (USD) / ETH Allocation (%)", secondary_y=True)
 st.plotly_chart(fig4, width="stretch")
+
+if "prob_up" in df_plot.columns:
+    fig_prob = make_subplots(specs=[[{"secondary_y": True}]])
+    fig_prob.add_trace(
+        go.Scatter(
+            x=df_plot["global_step"],
+            y=df_plot[price_col],
+            name=("ETH/USD" if price_col == "eth_price" else "XBT/USD"),
+            line=dict(color="#1f77b4", width=2),
+        ),
+        secondary_y=False,
+    )
+    fig_prob.add_trace(
+        go.Scatter(
+            x=df_plot["global_step"],
+            y=df_plot["prob_up"],
+            name="GBM prob_up",
+            line=dict(color="#e377c2", width=2),
+        ),
+        secondary_y=True,
+    )
+    fig_prob.add_hline(y=0.58, line_dash="dot", line_color="#2ca02c", secondary_y=True)
+    fig_prob.add_hline(y=0.42, line_dash="dot", line_color="#d62728", secondary_y=True)
+    fig_prob.update_layout(title="Asset Price vs GBM Directional Confidence")
+    fig_prob.update_xaxes(title_text="Global Step")
+    fig_prob.update_yaxes(title_text=("ETH/USD Price" if price_col == "eth_price" else "XBT/USD Price"), secondary_y=False)
+    fig_prob.update_yaxes(title_text="prob_up", secondary_y=True, range=[0, 1])
+    st.plotly_chart(fig_prob, width="stretch")
 
 if sac_df is not None and not sac_df.empty:
     sac_plot = sac_df.copy()
@@ -564,12 +599,12 @@ if sac_df is not None and not sac_df.empty:
 # ── Recent trades ──────────────────────────────────────────────────────────
 st.subheader("Recent Trades (Last 20 Buy/Sell Actions)")
 recent = (
-    df[df["action_taken"].isin(["buy", "sell"])][["timestamp", "step", "eth_price", "action_raw", "action_taken", "portfolio_usd", "reward"]]
+    df[df["action_taken"].isin(["buy", "sell"])][["timestamp", "step", price_col, "action_raw", "action_taken", "portfolio_usd", "reward"]]
     .tail(20)
     .sort_values("step", ascending=False)
     .copy()
 )
-recent["eth_price"]      = recent["eth_price"].map("${:,.2f}".format)
+recent[price_col]      = recent[price_col].map("${:,.2f}".format)
 recent["portfolio_usd"]  = recent["portfolio_usd"].map("${:,.2f}".format)
 recent["action_raw"]     = recent["action_raw"].map("{:+.4f}".format)
 recent["reward"]         = recent["reward"].map("{:.6f}".format)
