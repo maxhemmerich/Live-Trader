@@ -72,7 +72,9 @@ def evaluate_backtest(
     }
 
 
-def prepare_dataset(csv_path: str) -> tuple[pd.DataFrame, pd.Series, pd.Series, list[str]]:
+def prepare_dataset(
+    csv_path: str,
+) -> tuple[pd.DataFrame, pd.Series, pd.Series, pd.Series, list[str]]:
     src = build_lightweight_features(csv_path, quote_currency="USD")
     print(f"[backtest] Loaded {len(src)} rows")
     feature_columns = [c for c in src.columns if c not in BASE_COLUMNS]
@@ -80,12 +82,14 @@ def prepare_dataset(csv_path: str) -> tuple[pd.DataFrame, pd.Series, pd.Series, 
     X = src[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
     y = (src["close"].shift(-1) > src["close"]).astype(int)
     prices = src["close"].astype(float)
+    timestamps = src["ts"].astype(np.int64)
 
     X = X.iloc[:-1].reset_index(drop=True)
     y = y.iloc[:-1].reset_index(drop=True)
     prices = prices.iloc[:-1].reset_index(drop=True)
+    timestamps = timestamps.iloc[:-1].reset_index(drop=True)
     print("[backtest] Features built")
-    return X, y, prices, feature_columns
+    return X, y, prices, timestamps, feature_columns
 
 
 def sharpe_ratio(returns: np.ndarray) -> float:
@@ -104,12 +108,35 @@ def max_drawdown(equity_curve: np.ndarray) -> float:
 
 
 def main() -> None:
-    X, y, prices, feature_columns = prepare_dataset(CSV_PATH)
+    X, y, prices, timestamps, feature_columns = prepare_dataset(CSV_PATH)
     split_idx = int(len(X) * 0.8)
 
     X_train, y_train = X.iloc[:split_idx], y.iloc[:split_idx]
     X_test, y_test = X.iloc[split_idx:], y.iloc[split_idx:]
+    prices_train = prices.iloc[:split_idx]
     prices_test = prices.iloc[split_idx:].reset_index(drop=True)
+
+    train_start_dt = pd.to_datetime(timestamps.iloc[0], unit="ms", utc=True)
+    train_end_dt = pd.to_datetime(timestamps.iloc[split_idx - 1], unit="ms", utc=True)
+    test_start_dt = pd.to_datetime(timestamps.iloc[split_idx], unit="ms", utc=True)
+    test_end_dt = pd.to_datetime(timestamps.iloc[-1], unit="ms", utc=True)
+
+    print(
+        "[backtest] Training period: "
+        f"{train_start_dt.isoformat()} -> {train_end_dt.isoformat()}"
+    )
+    print(
+        "[backtest] Test period: "
+        f"{test_start_dt.isoformat()} -> {test_end_dt.isoformat()}"
+    )
+    print(
+        "[backtest] BTC close (training): "
+        f"start={prices_train.iloc[0]:.2f}, end={prices_train.iloc[-1]:.2f}"
+    )
+    print(
+        "[backtest] BTC close (test): "
+        f"start={prices_test.iloc[0]:.2f}, end={prices_test.iloc[-1]:.2f}"
+    )
     print("[backtest] Training GBM...")
 
     model = HistGradientBoostingClassifier(
