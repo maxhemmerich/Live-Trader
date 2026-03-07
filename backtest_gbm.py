@@ -97,8 +97,25 @@ def main() -> None:
 
     bar_returns = allocation * price_returns
     bar_returns[trades] -= FEE_RATE
+    fees_applied = trades.astype(float) * FEE_RATE
 
     portfolio = START_CASH * np.cumprod(1.0 + bar_returns)
+
+    debug_bars = min(20, len(bar_returns))
+    print("[backtest] First 20 simulation bars:")
+    print(
+        "bar\tprob_up\tallocation\tprice_return\tfee_applied\tbar_return\tportfolio_value"
+    )
+    for i in range(debug_bars):
+        print(
+            f"{i + 1}\t"
+            f"{prob_up[i]:.6f}\t"
+            f"{allocation[i]:.2f}\t"
+            f"{price_returns[i]:.6f}\t"
+            f"{fees_applied[i]:.4f}\t"
+            f"{bar_returns[i]:.6f}\t"
+            f"{portfolio[i]:.6f}"
+        )
 
     final_value = float(portfolio[-1])
     total_return = (final_value - START_CASH) / START_CASH
