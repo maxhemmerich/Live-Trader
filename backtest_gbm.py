@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import tempfile
+
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -122,6 +124,145 @@ def average_consecutive_run_length(binary_series: np.ndarray) -> float:
     run_boundaries = np.concatenate(([0], direction_changes, [len(binary_series)]))
     run_lengths = np.diff(run_boundaries)
     return float(run_lengths.mean())
+
+
+def run_timeframe_sweep() -> None:
+    print("[timeframe_sweep] Running independent timeframe sweep...")
+
+    raw = pd.read_csv(
+        CSV_PATH,
+        header=None,
+        names=["ts", "open", "high", "low", "close", "vol"],
+        usecols=[0, 1, 2, 3, 4, 5],
+    )
+    if raw.empty:
+        print("[timeframe_sweep] No raw rows found, skipping.")
+        return
+
+    raw["ts"] = pd.to_numeric(raw["ts"], errors="coerce")
+    for col in ["open", "high", "low", "close", "vol"]:
+        raw[col] = pd.to_numeric(raw[col], errors="coerce")
+
+    raw = raw.dropna(subset=["ts", "open", "high", "low", "close", "vol"]).copy()
+    if raw.empty:
+        print("[timeframe_sweep] No valid OHLCV rows after cleaning, skipping.")
+        return
+
+    ts_scale = 1000 if int(raw["ts"].median()) < 10**12 else 1
+    raw["ts"] = raw["ts"].astype(np.int64) * ts_scale
+    raw = raw.sort_values("ts").drop_duplicates(subset=["ts"], keep="last")
+    raw["dt"] = pd.to_datetime(raw["ts"], unit="ms", utc=True)
+    raw = raw.set_index("dt")
+
+    timeframe_minutes = [5, 15, 30, 60, 240, 1440]
+    ranking: list[dict[str, float]] = []
+
+    for tf in timeframe_minutes:
+        resampled = (
+            raw.resample(f"{tf}min")
+            .agg(
+                {
+                    "ts": "last",
+                    "open": "first",
+                    "high": "max",
+                    "low": "min",
+                    "close": "last",
+                    "vol": "sum",
+                }
+            )
+            .dropna(subset=["ts", "open", "high", "low", "close", "vol"])
+            .reset_index(drop=True)
+        )
+
+        if len(resampled) < 300:
+            print(
+                f"TF={tf}min | GBM_acc=nan% | Oracle=$nan | GBM=$nan | "
+                "avg_move=nan% | avg_consecutive=nan bars"
+            )
+            continue
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=True) as tmp:
+            resampled[["ts", "open", "high", "low", "close", "vol"]].to_csv(
+                tmp.name, index=False, header=False
+            )
+
+            src = build_lightweight_features(tmp.name, quote_currency="USD")
+
+        feature_columns = [c for c in src.columns if c not in BASE_COLUMNS]
+        X = src[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        y = (src["close"].shift(-1) > src["close"]).astype(int)
+        prices = src["close"].astype(float)
+
+        X = X.iloc[:-1].reset_index(drop=True)
+        y = y.iloc[:-1].reset_index(drop=True)
+        prices = prices.iloc[:-1].reset_index(drop=True)
+
+        if len(X) < 200:
+            print(
+                f"TF={tf}min | GBM_acc=nan% | Oracle=$nan | GBM=$nan | "
+                "avg_move=nan% | avg_consecutive=nan bars"
+            )
+            continue
+
+        split_idx = int(len(X) * 0.8)
+        X_train, y_train = X.iloc[:split_idx], y.iloc[:split_idx]
+        X_test, y_test = X.iloc[split_idx:], y.iloc[split_idx:]
+        prices_test = prices.iloc[split_idx:].reset_index(drop=True)
+
+        if len(X_test) < 3 or len(prices_test) < 3:
+            print(
+                f"TF={tf}min | GBM_acc=nan% | Oracle=$nan | GBM=$nan | "
+                "avg_move=nan% | avg_consecutive=nan bars"
+            )
+            continue
+
+        model = HistGradientBoostingClassifier(
+            max_iter=500,
+            max_depth=4,
+            learning_rate=0.05,
+            random_state=42,
+        )
+        model.fit(X_train, y_train)
+
+        y_pred = model.predict(X_test)
+        accuracy = float((y_pred == y_test.to_numpy(dtype=int)).mean())
+
+        prob_up = model.predict_proba(X_test)[:, 1]
+        test_prices_np = prices_test.to_numpy(dtype=float)
+        price_returns = np.diff(test_prices_np) / test_prices_np[:-1]
+        prob_up = prob_up[:-1]
+
+        oracle_prob_up = np.where(price_returns > 0.0, 1.0, 0.0)
+        oracle_result = evaluate_backtest(oracle_prob_up, price_returns, min_hold_bars=0)
+        gbm_result = evaluate_backtest(prob_up, price_returns, min_hold_bars=3)
+        avg_move = float(np.abs(price_returns).mean()) * 100.0
+        avg_consecutive = average_consecutive_run_length(oracle_prob_up.astype(int))
+
+        print(
+            f"TF={tf}min | GBM_acc={accuracy * 100:.2f}% | "
+            f"Oracle=${oracle_result['final_value']:.2f} | "
+            f"GBM=${gbm_result['final_value']:.2f} | "
+            f"avg_move={avg_move:.4f}% | "
+            f"avg_consecutive={avg_consecutive:.2f} bars"
+        )
+
+        ranking.append(
+            {
+                "timeframe": float(tf),
+                "gbm_final_value": gbm_result["final_value"],
+            }
+        )
+
+    if not ranking:
+        print("[timeframe_sweep] No valid timeframe results to rank.")
+        return
+
+    print("[timeframe_sweep] Summary ranking by GBM final value:")
+    ranking_sorted = sorted(ranking, key=lambda item: item["gbm_final_value"], reverse=True)
+    for rank, item in enumerate(ranking_sorted, start=1):
+        print(
+            f"{rank}. TF={int(item['timeframe'])}min | GBM=${item['gbm_final_value']:.2f}"
+        )
 
 
 def main() -> None:
@@ -252,3 +393,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    run_timeframe_sweep()
