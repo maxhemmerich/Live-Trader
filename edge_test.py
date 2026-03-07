@@ -108,23 +108,32 @@ def _find_btc_eur_csv(csv_path: str) -> str | None:
     return None
 
 
-def build_lightweight_features(csv_path: str, quote_currency: str = "USD") -> pd.DataFrame:
-    skip_header_row = 1 if _csv_has_header_row(csv_path) else 0
-    df = pd.read_csv(
-        csv_path,
-        header=None,
-        names=["ts", "open", "high", "low", "close", "vol"],
-        skiprows=skip_header_row,
-        usecols=[0, 1, 2, 3, 4, 5],
-        dtype={
-            "ts": np.int64,
-            "open": np.float32,
-            "high": np.float32,
-            "low": np.float32,
-            "close": np.float32,
-            "vol": np.float32,
-        },
-    )
+def build_lightweight_features(
+    csv_path: str | None = None,
+    quote_currency: str = "USD",
+    df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    if df is None:
+        if csv_path is None:
+            raise ValueError("Either csv_path or df must be provided.")
+        skip_header_row = 1 if _csv_has_header_row(csv_path) else 0
+        df = pd.read_csv(
+            csv_path,
+            header=None,
+            names=["ts", "open", "high", "low", "close", "vol"],
+            skiprows=skip_header_row,
+            usecols=[0, 1, 2, 3, 4, 5],
+            dtype={
+                "ts": np.int64,
+                "open": np.float32,
+                "high": np.float32,
+                "low": np.float32,
+                "close": np.float32,
+                "vol": np.float32,
+            },
+        )
+    else:
+        df = df.copy()
     if df.empty:
         return df
 
@@ -192,6 +201,8 @@ def build_lightweight_features(csv_path: str, quote_currency: str = "USD") -> pd
     if quote_currency != "EUR":
         df["eth_return_1"] = close.pct_change(1).fillna(0.0)
     else:
+        if csv_path is None:
+            raise ValueError("csv_path is required when quote_currency='EUR'.")
         btc_eur_csv = _find_btc_eur_csv(csv_path)
         if btc_eur_csv:
             btc_eur_returns = _load_close_returns(btc_eur_csv).rename(columns={"return_1": "btc_eur_return_1"})
