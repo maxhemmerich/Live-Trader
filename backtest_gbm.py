@@ -92,12 +92,13 @@ def main() -> None:
             else:
                 last_trade_idx = i
 
-    trades = np.diff(np.concatenate([[allocation[0]], allocation])) != 0
+    prev_allocation = np.concatenate([[allocation[0]], allocation[:-1]])
+    allocation_change = np.abs(allocation - prev_allocation)
+    trades = allocation_change > 0
     n_trades = int(trades.sum())
 
-    bar_returns = allocation * price_returns
-    bar_returns[trades] -= FEE_RATE
-    fees_applied = trades.astype(float) * FEE_RATE
+    fees_applied = FEE_RATE * allocation_change
+    bar_returns = allocation * price_returns - fees_applied
 
     portfolio = START_CASH * np.cumprod(1.0 + bar_returns)
 
