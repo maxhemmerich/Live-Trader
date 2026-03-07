@@ -102,6 +102,21 @@ def main() -> None:
 
     portfolio = START_CASH * np.cumprod(1.0 + bar_returns)
 
+    diagnostics = pd.DataFrame(
+        {
+            "bar": np.arange(1, len(bar_returns) + 1),
+            "prob_up": prob_up,
+            "allocation": allocation,
+            "prev_allocation": prev_allocation,
+            "allocation_change": allocation_change,
+            "trade": trades,
+            "price_return": price_returns,
+            "fee_applied": fees_applied,
+            "bar_return": bar_returns,
+            "portfolio": portfolio,
+        }
+    )
+
     debug_bars = min(20, len(bar_returns))
     print("[backtest] First 20 simulation bars:")
     print(
@@ -117,6 +132,29 @@ def main() -> None:
             f"{bar_returns[i]:.6f}\t"
             f"{portfolio[i]:.6f}"
         )
+
+    min_bar_return = float(diagnostics["bar_return"].min())
+    max_bar_return = float(diagnostics["bar_return"].max())
+    print(f"[backtest] Min bar_return: {min_bar_return:.6f}")
+    print(f"[backtest] Max bar_return: {max_bar_return:.6f}")
+
+    for threshold in (50.0, 1.0):
+        threshold_hits = diagnostics[diagnostics["portfolio"] < threshold]
+        if threshold_hits.empty:
+            print(f"[backtest] Portfolio never drops below ${threshold:.0f}.")
+            continue
+
+        event_idx = int(threshold_hits.index[0])
+        event_bar = int(diagnostics.loc[event_idx, "bar"])
+        print(f"[backtest] First bar where portfolio drops below ${threshold:.0f}: {event_bar}")
+
+        window_start = max(0, event_idx - 5)
+        window_end = min(len(diagnostics), event_idx + 6)
+        print(
+            f"[backtest] Bars {window_start + 1} to {window_end} around ${threshold:.0f} breach "
+            "(all columns):"
+        )
+        print(diagnostics.iloc[window_start:window_end].to_string(index=False))
 
     final_value = float(portfolio[-1])
     total_return = (final_value - START_CASH) / START_CASH
