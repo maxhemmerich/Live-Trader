@@ -45,12 +45,19 @@ def evaluate_backtest(
     desired_allocation = pd.Series(target).ffill().fillna(0.5).to_numpy(dtype=float)
     allocation = apply_min_hold_period(desired_allocation, min_hold_bars=min_hold_bars)
 
-    prev_allocation = np.concatenate([[allocation[0]], allocation[:-1]])
-    trade_mask = allocation != prev_allocation
+    # Allocation is encoded as long=1.0, flat=0.5, short=0.0.
+    # Convert this to directional exposure before applying returns.
+    position = (allocation * 2.0) - 1.0
+
+    prev_position = np.concatenate([[position[0]], position[:-1]])
+    position_change = np.abs(position - prev_position)
+    trade_mask = position_change > 0.0
     n_trades = int(trade_mask.sum())
 
-    fees_applied = FEE_RATE * trade_mask.astype(float)
-    bar_returns = allocation * price_returns - fees_applied
+    # A full side change (flat->long or flat->short) costs one fee.
+    # A reversal (long->short or short->long) costs two fees.
+    fees_applied = FEE_RATE * position_change
+    bar_returns = position * price_returns - fees_applied
     portfolio = START_CASH * np.cumprod(1.0 + bar_returns)
 
     final_value = float(portfolio[-1])
