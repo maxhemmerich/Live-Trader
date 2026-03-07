@@ -158,6 +158,11 @@ def main() -> None:
     price_returns = np.diff(prices) / prices[:-1]
     prob_up = prob_up[:-1]
 
+    oracle_prob_up = np.where(price_returns > 0.0, 1.0, 0.0)
+    oracle_result = evaluate_backtest(
+        oracle_prob_up, price_returns, min_hold_bars=1
+    )
+
     prob_min = float(prob_up.min())
     prob_max = float(prob_up.max())
     prob_mean = float(prob_up.mean())
@@ -216,6 +221,10 @@ def main() -> None:
     print(f"Allocation long (1.0): {base_result['pct_long']:.2f}%")
     print(f"Allocation short (0.0): {base_result['pct_short']:.2f}%")
     print(f"Allocation hold (0.5): {base_result['pct_hold']:.2f}%")
+    print(
+        "[backtest] Perfect oracle (actual next-bar direction, min_hold_bars=1) "
+        f"final portfolio value: ${oracle_result['final_value']:.2f}"
+    )
 
 
 if __name__ == "__main__":
