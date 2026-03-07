@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import tempfile
-
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -181,12 +179,7 @@ def run_timeframe_sweep() -> None:
             )
             continue
 
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=True) as tmp:
-            resampled[["ts", "open", "high", "low", "close", "vol"]].to_csv(
-                tmp.name, index=False, header=False
-            )
-
-            src = build_lightweight_features(tmp.name, quote_currency="USD")
+        src = build_lightweight_features(quote_currency="USD", df=resampled)
 
         feature_columns = [c for c in src.columns if c not in BASE_COLUMNS]
         X = src[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
