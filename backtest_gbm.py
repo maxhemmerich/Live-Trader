@@ -46,10 +46,10 @@ def evaluate_backtest(
     allocation = apply_min_hold_period(desired_allocation, min_hold_bars=min_hold_bars)
 
     prev_allocation = np.concatenate([[allocation[0]], allocation[:-1]])
-    allocation_change = np.abs(allocation - prev_allocation)
-    n_trades = int((allocation_change > 0).sum())
+    trade_mask = allocation != prev_allocation
+    n_trades = int(trade_mask.sum())
 
-    fees_applied = FEE_RATE * allocation_change
+    fees_applied = FEE_RATE * trade_mask.astype(float)
     bar_returns = allocation * price_returns - fees_applied
     portfolio = START_CASH * np.cumprod(1.0 + bar_returns)
 
@@ -107,6 +107,16 @@ def max_drawdown(equity_curve: np.ndarray) -> float:
     return float(drawdowns.min())
 
 
+def average_consecutive_run_length(binary_series: np.ndarray) -> float:
+    if len(binary_series) == 0:
+        return 0.0
+
+    direction_changes = np.where(binary_series[1:] != binary_series[:-1])[0] + 1
+    run_boundaries = np.concatenate(([0], direction_changes, [len(binary_series)]))
+    run_lengths = np.diff(run_boundaries)
+    return float(run_lengths.mean())
+
+
 def main() -> None:
     X, y, prices, timestamps, feature_columns = prepare_dataset(CSV_PATH)
     split_idx = int(len(X) * 0.8)
@@ -162,6 +172,7 @@ def main() -> None:
     oracle_result = evaluate_backtest(
         oracle_prob_up, price_returns, min_hold_bars=1
     )
+    avg_same_direction_bars = average_consecutive_run_length(oracle_prob_up.astype(int))
 
     prob_min = float(prob_up.min())
     prob_max = float(prob_up.max())
@@ -223,7 +234,12 @@ def main() -> None:
     print(f"Allocation hold (0.5): {base_result['pct_hold']:.2f}%")
     print(
         "[backtest] Perfect oracle (actual next-bar direction, min_hold_bars=1) "
-        f"final portfolio value: ${oracle_result['final_value']:.2f}"
+        f"final portfolio value: ${oracle_result['final_value']:.2f}, "
+        f"trades: {int(oracle_result['n_trades'])}"
+    )
+    print(
+        "[backtest] Average consecutive same-direction bars in test period: "
+        f"{avg_same_direction_bars:.2f}"
     )
 
 
