@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.ensemble import GradientBoostingClassifier, HistGradientBoostingClassifier
 
 from edge_test import BASE_COLUMNS, build_lightweight_features
 
@@ -209,13 +209,19 @@ def run_timeframe_sweep() -> None:
             )
             continue
 
-        model = HistGradientBoostingClassifier(
-            max_iter=500,
-            max_depth=4,
+        model = GradientBoostingClassifier(
+            n_estimators=300,
+            max_depth=3,
             learning_rate=0.05,
             random_state=42,
         )
         model.fit(X_train, y_train)
+
+        importance_idx = np.argsort(model.feature_importances_)[::-1][:8]
+        top_features = [
+            f"{feature_columns[idx]}={model.feature_importances_[idx]:.4f}"
+            for idx in importance_idx
+        ]
 
         y_pred = model.predict(X_test)
         accuracy = float((y_pred == y_test.to_numpy(dtype=int)).mean())
@@ -238,6 +244,7 @@ def run_timeframe_sweep() -> None:
             f"avg_move={avg_move:.4f}% | "
             f"avg_consecutive={avg_consecutive:.2f} bars"
         )
+        print(f"TF={tf}min | Top feature importances: {', '.join(top_features)}")
 
         ranking.append(
             {
