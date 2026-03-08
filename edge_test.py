@@ -234,6 +234,9 @@ def build_dataset(csv_path: str, candle_interval: int) -> tuple[np.ndarray, np.n
         for col in features_source.columns
         if col not in BASE_COLUMNS
     ]
+    print("[edge_test] Feature columns from build_lightweight_features (in order):")
+    for idx, name in enumerate(feature_columns, start=1):
+        print(f"  {idx:02d}. {name}")
 
     features_df = features_source[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
