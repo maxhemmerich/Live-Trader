@@ -108,6 +108,22 @@ def _find_btc_eur_csv(csv_path: str) -> str | None:
     return None
 
 
+def _find_eth_quote_csv(csv_path: str, quote_currency: str) -> str | None:
+    src = Path(csv_path)
+    src_upper = src.stem.upper()
+    if "ETH" in src_upper and quote_currency in src_upper:
+        return str(src)
+
+    timeframe_token = _extract_timeframe_token(str(src))
+    patterns = [f"*ETH*{quote_currency}*.csv", f"*XETH*{quote_currency}*.csv"]
+    for pattern in patterns:
+        for candidate in sorted(src.parent.glob(pattern)):
+            if timeframe_token and _extract_timeframe_token(str(candidate)) != timeframe_token:
+                continue
+            return str(candidate)
+    return None
+
+
 def build_lightweight_features(
     csv_path: str | None = None,
     quote_currency: str = "USD",
@@ -198,9 +214,17 @@ def build_lightweight_features(
     df["bid_ask_imbalance"] = imbalance.clip(-1.0, 1.0).fillna(0.0)
     df["price_dist_best_bid"] = ((close - low) / (close + 1e-8)).clip(-1.0, 1.0).fillna(0.0)
 
-    if quote_currency != "EUR":
-        df["eth_return_1"] = close.pct_change(1).fillna(0.0)
-    else:
+    df["eth_return_1"] = close.pct_change(1).fillna(0.0)
+    if csv_path is not None:
+        eth_quote_csv = _find_eth_quote_csv(csv_path, quote_currency)
+        if eth_quote_csv and Path(eth_quote_csv) != Path(csv_path):
+            eth_returns = _load_close_returns(eth_quote_csv).rename(columns={"return_1": "eth_return_1"})
+            df = df.merge(eth_returns, on="ts", how="left", suffixes=("", "_cross"))
+            if "eth_return_1_cross" in df.columns:
+                df["eth_return_1"] = df["eth_return_1_cross"].fillna(df["eth_return_1"])
+                df = df.drop(columns=["eth_return_1_cross"])
+
+    if quote_currency == "EUR":
         if csv_path is None:
             raise ValueError("csv_path is required when quote_currency='EUR'.")
         btc_eur_csv = _find_btc_eur_csv(csv_path)
@@ -277,10 +301,6 @@ def build_dataset(csv_path: str, candle_interval: int) -> tuple[np.ndarray, np.n
         for col in features_source.columns
         if col not in BASE_COLUMNS
     ]
-    print("[edge_test] Feature columns from build_lightweight_features (in order):")
-    for idx, name in enumerate(feature_columns, start=1):
-        print(f"  {idx:02d}. {name}")
-
     features_df = (
         features_source[feature_columns]
         .replace([np.inf, -np.inf], np.nan)
@@ -425,6 +445,15 @@ def print_ranked_summary(results: list[EdgeResult]) -> None:
         )
 
 
+def print_feature_columns_once(csv_path: str) -> None:
+    quote_currency = _detect_quote_currency(csv_path)
+    features_source = build_lightweight_features(csv_path, quote_currency=quote_currency)
+    feature_columns = [col for col in features_source.columns if col not in BASE_COLUMNS]
+    print("[edge_test] Feature columns from build_lightweight_features (in order):")
+    for idx, name in enumerate(feature_columns, start=1):
+        print(f"  {idx:02d}. {name}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate predictive edge of engineered features.")
     parser.add_argument(
@@ -445,6 +474,7 @@ if __name__ == "__main__":
     all_results: list[EdgeResult] = []
 
     if args.csv:
+        print_feature_columns_once(args.csv)
         interval, label = parse_timeframe(args.timeframe, args.csv)
         result = run_edge_test(args.csv, interval, label)
         if result is not None:
@@ -455,6 +485,7 @@ if __name__ == "__main__":
             raise FileNotFoundError(
                 "No files matching D:/*USD*.csv, D:/*EUR*.csv, or D:/*EURX*.csv with timeframe suffix were found."
             )
+        print_feature_columns_once(jobs[0][0])
         for csv_path, interval, label in jobs:
             result = run_edge_test(csv_path, interval, label)
             if result is not None:
