@@ -211,6 +211,49 @@ def build_lightweight_features(
     df["eth_return_4"] = close.pct_change(4).fillna(0.0)
     df["eth_return_16"] = close.pct_change(16).fillna(0.0)
 
+    # Longer-lookback trend/momentum
+    df["return_5"] = close.pct_change(5)
+    df["return_15"] = close.pct_change(15)
+    df["return_60"] = close.pct_change(60)
+    df["return_240"] = close.pct_change(240)
+    df["return_1440"] = close.pct_change(1440)
+
+    # Higher highs / lower lows using previous bars only.
+    prev_high_20 = high.shift(1).rolling(20).max()
+    prev_low_20 = low.shift(1).rolling(20).min()
+    prev_high_240 = high.shift(1).rolling(240).max()
+    prev_low_240 = low.shift(1).rolling(240).min()
+    df["hh_20"] = (close > prev_high_20).astype(np.float32)
+    df["ll_20"] = (close < prev_low_20).astype(np.float32)
+    df["hh_240"] = (close > prev_high_240).astype(np.float32)
+    df["ll_240"] = (close < prev_low_240).astype(np.float32)
+
+    # Volatility regime
+    realized_vol_20 = close.pct_change().rolling(20).std()
+    realized_vol_240 = close.pct_change().rolling(240).std().replace(0.0, np.nan)
+    df["vol_ratio"] = realized_vol_20 / (realized_vol_240 + 1e-8)
+    df["atr_ratio"] = atr14 / (atr14.shift(60) + 1e-8)
+
+    # Volume profile
+    vol_mean_20 = vol.rolling(20).mean().replace(0.0, np.nan)
+    vol_mean_240 = vol.rolling(240).mean().replace(0.0, np.nan)
+    df["vol_ratio_20"] = vol / (vol_mean_20 + 1e-8)
+    df["vol_ratio_240"] = vol / (vol_mean_240 + 1e-8)
+
+    # Price relative to long range
+    rolling_high_240 = high.rolling(240).max()
+    rolling_low_240 = low.rolling(240).min()
+    df["price_vs_high_240"] = (close - rolling_high_240) / (close + 1e-8)
+    df["price_vs_low_240"] = (close - rolling_low_240) / (close + 1e-8)
+
+    feature_columns = [c for c in df.columns if c not in BASE_COLUMNS]
+    df[feature_columns] = (
+        df[feature_columns]
+        .replace([np.inf, -np.inf], np.nan)
+        .fillna(0.0)
+        .clip(-5.0, 5.0)
+    )
+
     return df
 
 
@@ -238,7 +281,12 @@ def build_dataset(csv_path: str, candle_interval: int) -> tuple[np.ndarray, np.n
     for idx, name in enumerate(feature_columns, start=1):
         print(f"  {idx:02d}. {name}")
 
-    features_df = features_source[feature_columns].replace([np.inf, -np.inf], np.nan).fillna(0.0)
+    features_df = (
+        features_source[feature_columns]
+        .replace([np.inf, -np.inf], np.nan)
+        .fillna(0.0)
+        .clip(-5.0, 5.0)
+    )
 
     next_close = features_source["close"].shift(-1)
     labels = (next_close > features_source["close"]).astype(int)
