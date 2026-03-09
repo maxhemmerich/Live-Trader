@@ -62,7 +62,7 @@ def _pick_option(ticker: str, right: str, max_days: int = 14) -> Optional[Dict]:
         return None
 
     opts["premium"] = opts.apply(_option_mid, axis=1)
-    opts = opts[(opts["premium"] >= 0.05) & (opts["premium"] <= 0.50)]
+    opts = opts[(opts["premium"] > 0) & (opts["premium"] <= 2.00)]
     if opts.empty:
         return None
 
@@ -142,7 +142,7 @@ def run_screener() -> pd.DataFrame:
             continue
 
         kelly = kelly_fraction(p_beat if recommendation == "BUY_CALL" else 1 - p_beat, option["premium"])
-        bankroll = 300
+        bankroll = 90
         suggested = bankroll * kelly
 
         rows.append(
@@ -155,7 +155,7 @@ def run_screener() -> pd.DataFrame:
                 "option_expiry": option["option_expiry"],
                 "premium": round(option["premium"], 3),
                 "kelly_fraction": round(kelly, 4),
-                "suggested_$at$300_bankroll": round(suggested, 2),
+                "suggested_$at$100_bankroll": round(bankroll * kelly, 2),
             }
         )
 
