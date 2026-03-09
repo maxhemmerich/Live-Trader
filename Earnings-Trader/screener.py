@@ -122,6 +122,7 @@ def run_screener() -> pd.DataFrame:
             p_beat = model.predict(feat.drop(columns=["ticker"], errors="ignore"))
         expected_move = float(feat.iloc[0]["expected_move"]) if pd.notna(feat.iloc[0]["expected_move"]) else 0
         if expected_move < 0.03:
+            print(f"{ticker} SKIP: expected_move={expected_move:.3f}")
             continue
         iv_rank = float(feat.iloc[0]["iv_rank"]) if pd.notna(feat.iloc[0]["iv_rank"]) else np.nan
         if pd.isna(iv_rank) or iv_rank >= 0.60:
@@ -129,6 +130,7 @@ def run_screener() -> pd.DataFrame:
 
         recommendation = "SKIP"
         option = None
+        print(f"{ticker} p_beat={p_beat:.3f} iv_rank={feat.iloc[0]['iv_rank']:.3f} expected_move={expected_move:.3f}")
         if p_beat > 0.65:
             recommendation = "BUY_CALL"
             option = _pick_option(ticker, "C")
