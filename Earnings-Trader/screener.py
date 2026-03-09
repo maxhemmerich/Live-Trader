@@ -110,7 +110,10 @@ def run_screener() -> pd.DataFrame:
 
     for event in events:
         ticker = event["ticker"]
-        feat = build_features(ticker)
+        try:
+            feat = build_features(ticker)
+        except Exception:
+            continue
         if feat.empty:
             continue
         if model is None:
