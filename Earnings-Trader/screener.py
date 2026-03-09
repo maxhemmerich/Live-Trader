@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 
-from data import get_options_chain, get_upcoming_earnings
+from data import get_earnings_history, get_options_chain, get_upcoming_earnings
 from features import build_features
 from model import EarningsBeatModel
 
@@ -61,9 +61,22 @@ def kelly_fraction(p: float, premium: float, target_mult: float = 3.0) -> float:
     return max(0.0, min(float(f), 1.0))
 
 
+def _historical_beat_rate_signal(ticker: str, n: int = 8) -> float:
+    history = get_earnings_history(ticker, n=n)
+    if history.empty:
+        return 0.5
+    valid = history.dropna(subset=["eps_estimate", "eps_actual"])
+    if valid.empty:
+        return 0.5
+    return float((valid["eps_actual"] > valid["eps_estimate"]).mean())
+
+
 def run_screener() -> pd.DataFrame:
     events = get_upcoming_earnings(days_ahead=3)
-    model = EarningsBeatModel.load()
+    try:
+        model = EarningsBeatModel.load()
+    except Exception:
+        model = None
     rows = []
 
     for event in events:
@@ -71,7 +84,10 @@ def run_screener() -> pd.DataFrame:
         feat = build_features(ticker)
         if feat.empty:
             continue
-        p_beat = model.predict(feat.drop(columns=["ticker"], errors="ignore"))
+        if model is None:
+            p_beat = _historical_beat_rate_signal(ticker)
+        else:
+            p_beat = model.predict(feat.drop(columns=["ticker"], errors="ignore"))
         expected_move = float(feat.iloc[0]["expected_move"]) if pd.notna(feat.iloc[0]["expected_move"]) else 0
         if expected_move < 0.03:
             continue
