@@ -84,18 +84,18 @@ def get_earnings_history(ticker: str, n: int = 12) -> pd.DataFrame:
         if hist is None or hist.empty:
             return pd.DataFrame(columns=["quarter", "eps_estimate", "eps_actual", "surprise_pct"])
 
-        df = hist.reset_index().rename(
-            columns={
-                "Earnings Date": "quarter",
-                "EPS Estimate": "eps_estimate",
-                "Reported EPS": "eps_actual",
-                "Surprise(%)": "surprise_pct",
-                "Revenue Estimate": "revenue_estimate",
-                "Reported Revenue": "revenue_actual",
-                "Revenue Surprise(%)": "revenue_surprise_pct",
-            }
-        )
-        print(f"{ticker} earnings columns: {list(df.columns)}")
+        df = hist.reset_index()
+        rename_map = {
+            "Earnings Date": "quarter",
+            "EPS Estimate": "eps_estimate",
+            "Reported EPS": "eps_actual",
+            "Surprise(%)": "surprise_pct",
+            "Revenue Estimate": "revenue_estimate",
+            "Reported Revenue": "revenue_actual",
+            "Revenue Actual": "revenue_actual",
+            "Revenue Surprise(%)": "revenue_surprise_pct",
+        }
+        df = df.rename(columns={src: dst for src, dst in rename_map.items() if src in df.columns})
 
         preferred_cols = [
             "quarter",
@@ -107,6 +107,7 @@ def get_earnings_history(ticker: str, n: int = 12) -> pd.DataFrame:
             "revenue_surprise_pct",
         ]
         keep_cols = [col for col in preferred_cols if col in df.columns]
+        print(df.columns)
 
         df = df[keep_cols].copy()
         if "quarter" in df.columns:
