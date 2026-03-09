@@ -7,6 +7,25 @@ import pandas as pd
 import yfinance as yf
 
 
+EARNINGS_WATCHLIST = [
+    "AAPL",
+    "MSFT",
+    "NVDA",
+    "AMD",
+    "TSLA",
+    "META",
+    "AMZN",
+    "GOOGL",
+    "NFLX",
+    "CRM",
+    "ORCL",
+    "WMT",
+    "JPM",
+    "BAC",
+    "GS",
+]
+
+
 def _safe_float(value) -> Optional[float]:
     try:
         if value is None:
@@ -17,30 +36,44 @@ def _safe_float(value) -> Optional[float]:
 
 
 def get_upcoming_earnings(days_ahead: int = 3) -> List[Dict[str, str]]:
-    """Return earnings events in the next N days from yfinance calendar API."""
+    """Return watchlist earnings events in the next N days using ``Ticker.calendar``."""
     today = datetime.utcnow().date()
     end_date = today + timedelta(days=days_ahead)
     events: List[Dict[str, str]] = []
 
-    calendar = yf.EarningsCalendar()
-    df = calendar.earnings_between(today.isoformat(), end_date.isoformat())
-    if df is None or df.empty:
-        return events
-
-    for _, row in df.reset_index().iterrows():
-        ticker = str(row.get("ticker", "")).upper()
-        if not ticker:
+    for ticker in EARNINGS_WATCHLIST:
+        try:
+            calendar = yf.Ticker(ticker).calendar
+        except Exception:
             continue
-        report_date = row.get("startdatetime") or row.get("reportDate")
-        earnings_date = pd.to_datetime(report_date, errors="coerce")
+
+        value = None
+        if isinstance(calendar, pd.DataFrame) and not calendar.empty:
+            if "Earnings Date" in calendar.index and 0 in calendar.columns:
+                value = calendar.loc["Earnings Date", 0]
+            elif "Earnings Date" in calendar.columns:
+                value = calendar["Earnings Date"].iloc[0]
+        elif isinstance(calendar, dict):
+            value = calendar.get("Earnings Date")
+
+        if isinstance(value, (list, tuple)):
+            value = value[0] if value else None
+
+        earnings_date = pd.to_datetime(value, errors="coerce")
+        if pd.isna(earnings_date):
+            continue
+
+        earnings_day = earnings_date.tz_localize(None).date() if getattr(earnings_date, "tzinfo", None) else earnings_date.date()
+        if not (today <= earnings_day <= end_date):
+            continue
+
         events.append(
             {
                 "ticker": ticker,
-                "earnings_date": (
-                    earnings_date.date().isoformat() if pd.notna(earnings_date) else ""
-                ),
+                "earnings_date": earnings_day.isoformat(),
             }
         )
+
     return events
 
 
