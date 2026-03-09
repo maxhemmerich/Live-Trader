@@ -77,7 +77,8 @@ def build_features(ticker: str) -> pd.DataFrame:
         print(raw_earnings)
 
     latest_price = float(prices.iloc[-1]["close"])
-
+    
+    earnings = earnings.dropna(subset=["eps_actual"])
     surprises = earnings["surprise_pct"].astype(float)
     rev_surprises = earnings["revenue_surprise_pct"].astype(float) if "revenue_surprise_pct" in earnings.columns else pd.Series([], dtype=float)
 
