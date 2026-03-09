@@ -56,7 +56,7 @@ def build_features(ticker: str) -> pd.DataFrame:
     latest_price = float(prices.iloc[-1]["close"])
 
     surprises = earnings["surprise_pct"].astype(float)
-    rev_surprises = earnings["revenue_surprise_pct"].astype(float)
+    rev_surprises = earnings["revenue_surprise_pct"].astype(float) if "revenue_surprise_pct" in earnings.columns else pd.Series([], dtype=float)
 
     def lag(series: pd.Series, n: int) -> float:
         return float(series.iloc[n - 1]) if len(series) >= n else np.nan
@@ -110,10 +110,10 @@ def build_features(ticker: str) -> pd.DataFrame:
         "eps_surprise_mean": mean_surprise,
         "eps_surprise_std": std_surprise,
         "eps_estimate_revision": est_revision,
-        "rev_surprise_lag1": lag(rev_surprises, 1),
-        "rev_surprise_lag2": lag(rev_surprises, 2),
-        "rev_surprise_lag3": lag(rev_surprises, 3),
-        "rev_surprise_lag4": lag(rev_surprises, 4),
+        "rev_surprise_lag1": np.nan,
+        "rev_surprise_lag2": np.nan,
+        "rev_surprise_lag3": np.nan,
+        "rev_surprise_lag4": np.nan,
         "momentum_5d": ret(5),
         "momentum_20d": ret(20),
         "momentum_60d": ret(60),
