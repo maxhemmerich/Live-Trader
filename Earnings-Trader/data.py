@@ -1,5 +1,9 @@
 from __future__ import annotations
+from tickers import ALL_TICKERS
 
+import json
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -7,108 +11,13 @@ import pandas as pd
 import yfinance as yf
 
 
-EARNINGS_WATCHLIST = [
-    "AAPL",
-    "MSFT",
-    "NVDA",
-    "AMD",
-    "TSLA",
-    "META",
-    "AMZN",
-    "GOOGL",
-    "NFLX",
-    "CRM",
-    "ORCL",
-    "ADBE",
-    "INTC",
-    "QCOM",
-    "MU",
-    "JPM",
-    "BAC",
-    "GS",
-    "MS",
-    "WFC",
-    "C",
-    "BLK",
-    "AXP",
-    "JNJ",
-    "PFE",
-    "MRNA",
-    "UNH",
-    "ABBV",
-    "LLY",
-    "BMY",
-    "GILD",
-    "CVS",
-    "XOM",
-    "CVX",
-    "OXY",
-    "SLB",
-    "COP",
-    "WMT",
-    "TGT",
-    "COST",
-    "HD",
-    "MCD",
-    "SBUX",
-    "NKE",
-    "DIS",
-    "AMGN",
-    "BA",
-    "CAT",
-    "GE",
-    "HON",
-    "MMM",
-    "LMT",
-    "RTX",
-    "GME",
-    "AMC",
-    "PLTR",
-    "RIVN",
-    "LCID",
-    "SOFI",
-    "HOOD",
-    "COIN",
-    "MSTR",
-    "RBLX",
-    "SNAP",
-    "UBER",
-    "LYFT",
-    "DASH",
-    "ABNB",
-    "SQ",
-    "PYPL",
-    "ZM",
-    "DOCU",
-    "ROKU",
-    "AVGO",
-    "TSM",
-    "ASML",
-    "SMCI",
-    "ARM",
-    "IBM",
-    "NOW",
-    "PANW",
-    "CRWD",
-    "SNOW",
-    "SHOP",
-    "SCHW",
-    "DHR",
-    "TMO",
-    "ISRG",
-    "PG",
-    "KO",
-    "PEP",
-    "PM",
-    "MO",
-    "UPS",
-    "FDX",
-    "HAL",
-    "MARA",
-    "RIOT",
-    "F",
-    "GM",
-]
+
+_CACHE_FILE = os.path.join(os.path.dirname(__file__), "tickers_cache.json")
+_CACHE_TTL_HOURS = 24
+
+
+def get_active_tickers() -> List[str]:
+    return ALL_TICKERS
 
 
 def _safe_float(value) -> Optional[float]:
@@ -120,77 +29,62 @@ def _safe_float(value) -> Optional[float]:
         return None
 
 
+def _check_ticker_earnings(ticker: str, today, end_date):
+    try:
+        calendar = yf.Ticker(ticker).calendar
+    except Exception:
+        return None
+
+    value = None
+    if isinstance(calendar, pd.DataFrame) and not calendar.empty:
+        if "Earnings Date" in calendar.index and 0 in calendar.columns:
+            value = calendar.loc["Earnings Date", 0]
+        elif "Earnings Date" in calendar.columns:
+            value = calendar["Earnings Date"].iloc[0]
+    elif isinstance(calendar, dict):
+        value = calendar.get("Earnings Date")
+
+    if isinstance(value, (list, tuple)):
+        value = value[0] if value else None
+
+    earnings_date = pd.to_datetime(value, errors="coerce")
+    if pd.isna(earnings_date):
+        return None
+
+    earnings_day = earnings_date.tz_localize(None).date() if getattr(earnings_date, "tzinfo", None) else earnings_date.date()
+    if not (today <= earnings_day <= end_date):
+        return None
+
+    return {"ticker": ticker, "earnings_date": earnings_day.isoformat()}
+
+
 def get_upcoming_earnings(days_ahead: int = 3) -> List[Dict[str, str]]:
-    """Return watchlist earnings events in the next N days using ``Ticker.calendar``."""
     today = datetime.utcnow().date()
     end_date = today + timedelta(days=days_ahead)
-    events: List[Dict[str, str]] = []
+    tickers = get_active_tickers()
+    events = []
 
-    for ticker in EARNINGS_WATCHLIST:
-        try:
-            calendar = yf.Ticker(ticker).calendar
-        except Exception:
-            continue
-
-        value = None
-        if isinstance(calendar, pd.DataFrame) and not calendar.empty:
-            if "Earnings Date" in calendar.index and 0 in calendar.columns:
-                value = calendar.loc["Earnings Date", 0]
-            elif "Earnings Date" in calendar.columns:
-                value = calendar["Earnings Date"].iloc[0]
-        elif isinstance(calendar, dict):
-            value = calendar.get("Earnings Date")
-
-        if isinstance(value, (list, tuple)):
-            value = value[0] if value else None
-
-        earnings_date = pd.to_datetime(value, errors="coerce")
-        if pd.isna(earnings_date):
-            continue
-
-        earnings_day = earnings_date.tz_localize(None).date() if getattr(earnings_date, "tzinfo", None) else earnings_date.date()
-        if not (today <= earnings_day <= end_date):
-            continue
-
-        events.append(
-            {
-                "ticker": ticker,
-                "earnings_date": earnings_day.isoformat(),
-            }
-        )
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(_check_ticker_earnings, t, today, end_date): t for t in tickers}
+        for future in as_completed(futures):
+            result = future.result()
+            if result:
+                events.append(result)
 
     return events
 
 
 def get_earnings_history(ticker: str, n: int = 20) -> pd.DataFrame:
-    """Return recent quarterly earnings history for ticker."""
     tk = yf.Ticker(ticker)
-
-    # Try earnings_dates first (contains actual/estimate/surprise info)
     df = tk.get_earnings_dates(limit=max(n, 40))
     if df is None or df.empty:
-        return pd.DataFrame(
-            columns=[
-                "date",
-                "eps_estimate",
-                "eps_actual",
-                "surprise_pct",
-                "revenue_estimate",
-                "revenue_actual",
-                "revenue_surprise_pct",
-            ]
-        )
+        return pd.DataFrame(columns=["date", "eps_estimate", "eps_actual", "surprise_pct"])
 
-    df = df.rename(
-        columns={
-            "EPS Estimate": "eps_estimate",
-            "Reported EPS": "eps_actual",
-            "Surprise(%)": "surprise_pct",
-            "Revenue Estimate": "revenue_estimate",
-            "Revenue Actual": "revenue_actual",
-            "Revenue Surprise(%)": "revenue_surprise_pct",
-        }
-    ).copy()
+    df = df.rename(columns={
+        "EPS Estimate": "eps_estimate",
+        "Reported EPS": "eps_actual",
+        "Surprise(%)": "surprise_pct",
+    }).copy()
 
     df = df.reset_index().rename(columns={"Earnings Date": "date"})
     available = [c for c in ["date", "eps_estimate", "eps_actual", "surprise_pct"] if c in df.columns]
@@ -206,16 +100,10 @@ def get_price_history(ticker: str, days: int = 90) -> pd.DataFrame:
     hist = tk.history(period=f"{period_days}d", auto_adjust=False)
     if hist is None or hist.empty:
         return pd.DataFrame(columns=["date", "open", "high", "low", "close", "volume"])
-    hist = hist.reset_index().rename(
-        columns={
-            "Date": "date",
-            "Open": "open",
-            "High": "high",
-            "Low": "low",
-            "Close": "close",
-            "Volume": "volume",
-        }
-    )
+    hist = hist.reset_index().rename(columns={
+        "Date": "date", "Open": "open", "High": "high",
+        "Low": "low", "Close": "close", "Volume": "volume",
+    })
     hist["date"] = pd.to_datetime(hist["date"]).dt.tz_localize(None)
     return hist[["date", "open", "high", "low", "close", "volume"]].tail(days).reset_index(drop=True)
 
@@ -234,35 +122,15 @@ def get_options_chain(ticker: str) -> pd.DataFrame:
             rows.append(cpy)
 
     if not rows:
-        return pd.DataFrame(
-            columns=[
-                "contractSymbol",
-                "strike",
-                "lastPrice",
-                "bid",
-                "ask",
-                "volume",
-                "openInterest",
-                "impliedVolatility",
-                "expiry",
-                "right",
-                "inTheMoney",
-            ]
-        )
+        return pd.DataFrame(columns=[
+            "contractSymbol", "strike", "lastPrice", "bid", "ask",
+            "volume", "openInterest", "impliedVolatility", "expiry", "right", "inTheMoney",
+        ])
 
     all_opts = pd.concat(rows, ignore_index=True)
     keep_cols = [
-        "contractSymbol",
-        "strike",
-        "lastPrice",
-        "bid",
-        "ask",
-        "volume",
-        "openInterest",
-        "impliedVolatility",
-        "expiry",
-        "right",
-        "inTheMoney",
+        "contractSymbol", "strike", "lastPrice", "bid", "ask",
+        "volume", "openInterest", "impliedVolatility", "expiry", "right", "inTheMoney",
     ]
     for col in keep_cols:
         if col not in all_opts:
