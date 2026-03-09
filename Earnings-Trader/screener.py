@@ -121,7 +121,7 @@ def run_screener() -> pd.DataFrame:
         if expected_move < 0.03:
             continue
         iv_rank = float(feat.iloc[0]["iv_rank"]) if pd.notna(feat.iloc[0]["iv_rank"]) else np.nan
-        if pd.notna(iv_rank) and iv_rank > 0.80:
+        if pd.isna(iv_rank) or iv_rank >= 0.60:
             continue
 
         recommendation = "SKIP"
