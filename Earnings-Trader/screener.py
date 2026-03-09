@@ -20,7 +20,7 @@ def _option_mid(row: pd.Series) -> float:
     return float(row.get("lastPrice", np.nan))
 
 
-def _pick_option(ticker: str, right: str, max_days: int = 7) -> Optional[Dict]:
+def _pick_option(ticker: str, right: str, max_days: int = 14) -> Optional[Dict]:
     opts = get_options_chain(ticker)
     if opts.empty:
         return None
@@ -32,8 +32,22 @@ def _pick_option(ticker: str, right: str, max_days: int = 7) -> Optional[Dict]:
     if opts.empty:
         return None
 
+    opts = opts[
+        opts["bid"].notna()
+        & opts["ask"].notna()
+        & (opts["bid"] > 0)
+        & (opts["ask"] > 0)
+    ]
+    if opts.empty:
+        return None
+
+    opts["spread_pct"] = (opts["ask"] - opts["bid"]) / opts["ask"]
+    opts = opts[opts["spread_pct"] <= 0.50]
+    if opts.empty:
+        return None
+
     opts["premium"] = opts.apply(_option_mid, axis=1)
-    opts = opts[(opts["premium"] > 0) & (opts["premium"] <= 0.50)]
+    opts = opts[(opts["premium"] >= 0.05) & (opts["premium"] <= 0.50)]
     if opts.empty:
         return None
 
@@ -90,6 +104,9 @@ def run_screener() -> pd.DataFrame:
             p_beat = model.predict(feat.drop(columns=["ticker"], errors="ignore"))
         expected_move = float(feat.iloc[0]["expected_move"]) if pd.notna(feat.iloc[0]["expected_move"]) else 0
         if expected_move < 0.03:
+            continue
+        iv_rank = float(feat.iloc[0]["iv_rank"]) if pd.notna(feat.iloc[0]["iv_rank"]) else np.nan
+        if pd.notna(iv_rank) and iv_rank > 0.80:
             continue
 
         recommendation = "SKIP"
