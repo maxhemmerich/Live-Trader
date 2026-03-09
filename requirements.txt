@@ -9,6 +9,7 @@ streamlit
 streamlit-autorefresh
 plotly
 numpy
-
 scikit-learn
 joblib
+requests
+textblob
