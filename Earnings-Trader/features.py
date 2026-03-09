@@ -45,6 +45,24 @@ def _atm_straddle_ratio(price: float, options_df: pd.DataFrame) -> float:
     return straddle / price if price > 0 else np.nan
 
 
+def _atm_implied_volatility(price: float, options_df: pd.DataFrame) -> float:
+    if options_df.empty or price <= 0 or "impliedVolatility" not in options_df.columns:
+        return np.nan
+    earliest = options_df["expiry"].min()
+    near = options_df[options_df["expiry"] == earliest].copy()
+    if near.empty:
+        return np.nan
+    near = near[pd.notna(near["impliedVolatility"])].copy()
+    if near.empty:
+        return np.nan
+    near["distance"] = (near["strike"] - price).abs()
+    atm_strike = near.sort_values("distance").iloc[0]["strike"]
+    atm_rows = near[near["strike"] == atm_strike]
+    if atm_rows.empty:
+        return np.nan
+    return float(atm_rows["impliedVolatility"].astype(float).mean())
+
+
 def build_features(ticker: str) -> pd.DataFrame:
     earnings = get_earnings_history(ticker, n=24)
     prices = get_price_history(ticker, days=260)
@@ -52,6 +70,11 @@ def build_features(ticker: str) -> pd.DataFrame:
 
     if earnings.empty or prices.empty:
         return pd.DataFrame()
+
+    if ticker.upper() == "ADBE":
+        raw_earnings = yf.Ticker(ticker).get_earnings_dates(limit=24)
+        print("ADBE raw earnings dataframe:")
+        print(raw_earnings)
 
     latest_price = float(prices.iloc[-1]["close"])
 
@@ -79,16 +102,10 @@ def build_features(ticker: str) -> pd.DataFrame:
 
     iv_proxy = _atm_straddle_ratio(latest_price, options_df)
 
-    year_prices = get_price_history(ticker, days=365)
-    iv_hist = []
-    for shift in [5, 10, 15, 20, 30, 45, 60, 90]:
-        if len(year_prices) > shift:
-            sub_price = float(year_prices.iloc[-1 - shift]["close"])
-            iv_hist.append(abs(float(year_prices.iloc[-shift]["close"] / sub_price - 1)))
-    iv_min, iv_max = (min(iv_hist), max(iv_hist)) if iv_hist else (np.nan, np.nan)
+    atm_iv = _atm_implied_volatility(latest_price, options_df)
     iv_rank = np.nan
-    if pd.notna(iv_proxy) and pd.notna(iv_min) and pd.notna(iv_max) and iv_max > iv_min:
-        iv_rank = (iv_proxy - iv_min) / (iv_max - iv_min)
+    if pd.notna(atm_iv):
+        iv_rank = min(max(float(atm_iv), 0.0) / 2.0, 1.0)
 
     beats = (surprises > 0).astype(int)
     last_beat = int(beats.iloc[0]) if len(beats) else 0
