@@ -55,4 +55,9 @@ SUPPLEMENTAL = [
     "F","GM","HAL","SLB","SCHW","ISRG","ABBV","LLY","MRNA","ADBE","AMD","NVDA",
 ]
 
-ALL_TICKERS = list(set(SP500 + SUPPLEMENTAL))
+
+RUSSELL_1000_MIDCAP = [
+    "BILL", "CFLT", "DDOG", "ESTC", "GTLB", "HCP", "MDB", "NET", "OKTA", "PATH", "S", "SMAR", "TEAM", "TTD", "TWLO", "U", "ZI", "ZS", "AFRM", "ALAB", "ALTR", "APP", "ASAN", "AXON", "BIRD", "BRZE", "CAVA", "CELH", "CHWY", "CLOV", "CPNG", "CRNX", "CVNA", "DLO", "DUOL", "ENVX", "EXAS", "EXEL", "FLUX", "FRPT", "GLBE", "GOCO", "GTLS", "HIMS", "IOT", "IONQ", "JOBY", "KVYO", "LEGN", "LNTH", "LOPE", "LYEL", "MELI", "MNDY", "MRUS", "NFLX", "NTRA", "NVAX", "NVCR", "NXST", "ONON", "OPEN", "OSCR", "PAYO", "PCVX", "PERI", "PLNT", "PNTM", "POWL", "PRCT", "PRGS", "PRVA", "PSFE", "PTGX", "PUBM", "PTON", "RGEN", "RKLB", "RXRX", "RYAN", "SAIA", "SBSW", "SHAK", "SLG", "SMTC", "SNAP", "SNOW", "SPCE", "SPGI", "SPSC", "SPTN", "SPWH", "SRZN", "STAA", "STEP", "STNE", "SWAV", "TMDX", "TPVG", "TREX", "TRIP", "TRMK", "TRTX", "TSEM", "TTWO", "TUSK", "TWST", "UCTT", "UDMY", "ULCC", "UPST", "URGN", "VERX", "VFC", "VITL", "VNET", "VRNS", "VRTX", "WDAY", "WING", "WOLF", "WRBY", "XPEV", "XRAY", "YETI", "YELP", "ZG",
+]
+
+ALL_TICKERS = list(set(SP500 + SUPPLEMENTAL + RUSSELL_1000_MIDCAP))

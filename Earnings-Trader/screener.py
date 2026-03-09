@@ -5,7 +5,6 @@ from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 from dotenv import load_dotenv
 
 from data import get_earnings_history, get_options_chain, get_upcoming_earnings
@@ -21,15 +20,12 @@ def _option_mid(row: pd.Series) -> float:
     return float(row.get("lastPrice", np.nan))
 
 
-def _pick_option(ticker: str, right: str, max_days: int = 14) -> Optional[Dict]:
+def _pick_option(ticker: str, right: str, max_days: int = 14, debug: bool = False) -> Optional[Dict]:
     opts = get_options_chain(ticker)
+    if debug:
+        print(f"{ticker} option chain size before filtering: {len(opts)}")
     if opts.empty:
         return None
-
-    spot = yf.Ticker(ticker).fast_info.get("last_price")
-    if spot is None or pd.isna(spot) or float(spot) <= 0:
-        return None
-    spot = float(spot)
 
     today = pd.Timestamp.utcnow().tz_localize(None)
     opts = opts.copy()
@@ -38,19 +34,10 @@ def _pick_option(ticker: str, right: str, max_days: int = 14) -> Optional[Dict]:
     if opts.empty:
         return None
 
-    if right == "C":
-        opts = opts[(opts["strike"] >= spot) & (opts["strike"] <= spot * 1.15)]
-    elif right == "P":
-        opts = opts[(opts["strike"] >= spot * 0.85) & (opts["strike"] <= spot)]
-    else:
-        return None
-    if opts.empty:
-        return None
-
     opts = opts[
         opts["bid"].notna()
         & opts["ask"].notna()
-        & (opts["bid"] > 0)
+        & (opts["bid"] >= 0)
         & (opts["ask"] > 0)
     ]
     if opts.empty:
@@ -62,7 +49,7 @@ def _pick_option(ticker: str, right: str, max_days: int = 14) -> Optional[Dict]:
         return None
 
     opts["premium"] = opts.apply(_option_mid, axis=1)
-    opts = opts[(opts["premium"] > 0) & (opts["premium"] <= 2.00)]
+    opts = opts[(opts["premium"] >= 0.05) & (opts["premium"] <= 2.00)]
     if opts.empty:
         return None
 
@@ -133,10 +120,10 @@ def run_screener() -> pd.DataFrame:
         print(f"{ticker} p_beat={p_beat:.3f} iv_rank={feat.iloc[0]['iv_rank']:.3f} expected_move={expected_move:.3f}")
         if p_beat > 0.65:
             recommendation = "BUY_CALL"
-            option = _pick_option(ticker, "C")
+            option = _pick_option(ticker, "C", debug=(len(rows) == 0))
         elif p_beat < 0.35:
             recommendation = "BUY_PUT"
-            option = _pick_option(ticker, "P")
+            option = _pick_option(ticker, "P", debug=(len(rows) == 0))
 
         if not option:
             continue
