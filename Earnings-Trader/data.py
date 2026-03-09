@@ -2,6 +2,7 @@ from __future__ import annotations
 from tickers import ALL_TICKERS
 
 import json
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
@@ -9,6 +10,8 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 import yfinance as yf
+
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 
 
