@@ -122,7 +122,9 @@ def run_screener() -> pd.DataFrame:
             }
         )
 
-    out = pd.DataFrame(rows).sort_values("P(beat)", ascending=False)
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        out = out.sort_values("P(beat)", ascending=False)
     if not out.empty:
         print(out.to_string(index=False))
     else:
