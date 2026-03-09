@@ -5,6 +5,7 @@ from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
+import yfinance as yf
 from dotenv import load_dotenv
 
 from data import get_earnings_history, get_options_chain, get_upcoming_earnings
@@ -25,10 +26,24 @@ def _pick_option(ticker: str, right: str, max_days: int = 14) -> Optional[Dict]:
     if opts.empty:
         return None
 
+    spot = yf.Ticker(ticker).fast_info.get("last_price")
+    if spot is None or pd.isna(spot) or float(spot) <= 0:
+        return None
+    spot = float(spot)
+
     today = pd.Timestamp.utcnow().tz_localize(None)
     opts = opts.copy()
     opts["dte"] = (pd.to_datetime(opts["expiry"]) - today).dt.days
     opts = opts[(opts["dte"] >= 0) & (opts["dte"] <= max_days) & (opts["right"] == right)]
+    if opts.empty:
+        return None
+
+    if right == "C":
+        opts = opts[(opts["strike"] >= spot) & (opts["strike"] <= spot * 1.15)]
+    elif right == "P":
+        opts = opts[(opts["strike"] >= spot * 0.85) & (opts["strike"] <= spot)]
+    else:
+        return None
     if opts.empty:
         return None
 
