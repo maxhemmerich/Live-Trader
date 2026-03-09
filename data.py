@@ -81,29 +81,46 @@ def get_earnings_history(ticker: str, n: int = 12) -> pd.DataFrame:
     """Return historical EPS estimate/actual surprises from yfinance earnings dates."""
     try:
         hist = yf.Ticker(ticker).get_earnings_dates(limit=n)
+        if hist is None or hist.empty:
+            return pd.DataFrame(columns=["quarter", "eps_estimate", "eps_actual", "surprise_pct"])
+
+        df = hist.reset_index().rename(
+            columns={
+                "Earnings Date": "quarter",
+                "EPS Estimate": "eps_estimate",
+                "Reported EPS": "eps_actual",
+                "Surprise(%)": "surprise_pct",
+                "Revenue Estimate": "revenue_estimate",
+                "Reported Revenue": "revenue_actual",
+                "Revenue Surprise(%)": "revenue_surprise_pct",
+            }
+        )
+        print(f"{ticker} earnings columns: {list(df.columns)}")
+
+        preferred_cols = [
+            "quarter",
+            "eps_estimate",
+            "eps_actual",
+            "surprise_pct",
+            "revenue_estimate",
+            "revenue_actual",
+            "revenue_surprise_pct",
+        ]
+        keep_cols = [col for col in preferred_cols if col in df.columns]
+
+        df = df[keep_cols].copy()
+        if "quarter" in df.columns:
+            df["quarter"] = pd.to_datetime(df["quarter"], errors="coerce")
+        if "surprise_pct" in df.columns:
+            df["surprise_pct"] = pd.to_numeric(df["surprise_pct"], errors="coerce")
+        if "revenue_surprise_pct" in df.columns:
+            df["revenue_surprise_pct"] = pd.to_numeric(df["revenue_surprise_pct"], errors="coerce")
+
+        if "quarter" in df.columns:
+            return df.sort_values("quarter", ascending=False).reset_index(drop=True)
+        return df.reset_index(drop=True)
     except Exception:
-        return pd.DataFrame(columns=["quarter", "eps_estimate", "eps_actual", "surprise_pct"])
-
-    if hist is None or hist.empty:
-        return pd.DataFrame(columns=["quarter", "eps_estimate", "eps_actual", "surprise_pct"])
-
-    df = hist.reset_index().rename(
-        columns={
-            "Earnings Date": "quarter",
-            "EPS Estimate": "eps_estimate",
-            "Reported EPS": "eps_actual",
-            "Surprise(%)": "surprise_pct",
-        }
-    )
-    keep_cols = ["quarter", "eps_estimate", "eps_actual", "surprise_pct"]
-    for col in keep_cols:
-        if col not in df.columns:
-            df[col] = pd.NA
-
-    df = df[keep_cols].copy()
-    df["quarter"] = pd.to_datetime(df["quarter"], errors="coerce")
-    df["surprise_pct"] = pd.to_numeric(df["surprise_pct"], errors="coerce")
-    return df.sort_values("quarter", ascending=False).reset_index(drop=True)
+        return pd.DataFrame()
 
 
 def get_options_chain(ticker: str) -> pd.DataFrame:
