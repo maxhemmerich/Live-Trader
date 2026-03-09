@@ -71,10 +71,6 @@ def build_features(ticker: str) -> pd.DataFrame:
     if earnings.empty or prices.empty:
         return pd.DataFrame()
 
-    if ticker.upper() == "ADBE":
-        raw_earnings = yf.Ticker(ticker).get_earnings_dates(limit=24)
-        print("ADBE raw earnings dataframe:")
-        print(raw_earnings)
 
     latest_price = float(prices.iloc[-1]["close"])
     
