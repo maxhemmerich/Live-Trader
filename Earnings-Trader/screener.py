@@ -101,7 +101,12 @@ def _historical_beat_rate_signal(ticker: str, n: int = 8) -> float:
 
 
 def run_screener() -> pd.DataFrame:
-    events = get_upcoming_earnings(days_ahead=3)
+    events = get_upcoming_earnings(days_ahead=7)
+    ```
+    
+    Save, then:
+    ```
+    python screener.py
     try:
         model = EarningsBeatModel.load()
     except Exception:
