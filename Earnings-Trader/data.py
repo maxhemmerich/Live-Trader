@@ -64,7 +64,7 @@ def get_upcoming_earnings(days_ahead: int = 3) -> List[Dict[str, str]]:
     tickers = get_active_tickers()
     events = []
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {executor.submit(_check_ticker_earnings, t, today, end_date): t for t in tickers}
         for future in as_completed(futures):
             result = future.result()
