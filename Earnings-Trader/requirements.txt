@@ -1,0 +1,10 @@
+yfinance
+xgboost
+pandas
+numpy
+scikit-learn
+streamlit
+ibapi
+python-dotenv
+plotly
+joblib
