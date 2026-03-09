@@ -65,27 +65,6 @@ def _write_ticker_cache(tickers: list[str]) -> None:
         pass
 
 
-def _fetch_sp500_tickers() -> list[str]:
-    try:
-        table = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0]
-    except ImportError:
-        table = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies", flavor="bs4")[0]
-    return _dedupe_tickers(table.get("Symbol", []).tolist())
-
-
-def _fetch_russell1000_tickers() -> list[str]:
-    try:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/Russell_1000_Index")
-    except ImportError:
-        tables = pd.read_html("https://en.wikipedia.org/wiki/Russell_1000_Index", flavor="bs4")
-    collected: list[str] = []
-    for table in tables:
-        for column in ("Symbol", "Ticker", "Ticker symbol"):
-            if column in table.columns:
-                collected.extend(table[column].tolist())
-    return _dedupe_tickers(collected)
-
-
 def get_active_tickers() -> list[str]:
     """Return an actively traded ticker universe with 24-hour caching."""
     cached = _read_cached_tickers()
@@ -93,15 +72,13 @@ def get_active_tickers() -> list[str]:
         return cached
 
     try:
-        sp500 = _fetch_sp500_tickers()
+        sp500 = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")[0][
+            "Symbol"
+        ].tolist()
     except Exception:
         sp500 = []
-    try:
-        russell = _fetch_russell1000_tickers()
-    except Exception:
-        russell = []
 
-    tickers = _dedupe_tickers([*sp500, *russell, *SUPPLEMENTAL_TICKERS])
+    tickers = _dedupe_tickers([*sp500, *SUPPLEMENTAL_TICKERS])
     _write_ticker_cache(tickers)
     return tickers
 
