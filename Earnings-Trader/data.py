@@ -108,17 +108,8 @@ def get_earnings_history(ticker: str, n: int = 20) -> pd.DataFrame:
     ).copy()
 
     df = df.reset_index().rename(columns={"Earnings Date": "date"})
-    out = df[
-        [
-            "date",
-            "eps_estimate",
-            "eps_actual",
-            "surprise_pct",
-            "revenue_estimate",
-            "revenue_actual",
-            "revenue_surprise_pct",
-        ]
-    ].copy()
+    available = [c for c in ["date", "eps_estimate", "eps_actual", "surprise_pct"] if c in df.columns]
+    out = df[available].copy()
     out["date"] = pd.to_datetime(out["date"], errors="coerce").dt.tz_localize(None)
     out = out.sort_values("date", ascending=False).head(n).reset_index(drop=True)
     return out
