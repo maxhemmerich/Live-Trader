@@ -136,7 +136,7 @@ def get_upcoming_earnings(days_ahead: int = 5, tickers: Iterable[str] | None = N
             return {"ticker": symbol, "earnings_date": earnings_day}
         return None
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         rows = [row for row in executor.map(fetch_symbol, symbols) if row is not None]
 
     if not rows:
